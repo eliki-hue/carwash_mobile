@@ -3,17 +3,18 @@ import { useEffect, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 export default function RootLayout() {
-  const [isLoggedIn, setIsLoggedIn] = useState<boolean | null>(null);
+  const [isLoggedIn, setIsLoggedIn] = useState(null);
 
   useEffect(() => {
+    const checkAuth = async () => {
+      const token = await AsyncStorage.getItem("token");
+      setIsLoggedIn(!!token);
+    };
+
     checkAuth();
   }, []);
 
-  const checkAuth = async () => {
-    const token = await AsyncStorage.getItem("token");
-    setIsLoggedIn(!!token);
-  };
-
+  //  Prevent rendering before check
   if (isLoggedIn === null) return null;
 
   return (
