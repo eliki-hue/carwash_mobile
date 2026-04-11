@@ -1,486 +1,330 @@
-// app/(tabs)/create-job.tsx
-import React, { useState, useEffect } from 'react';
+// app/(tabs)/jobs.tsx
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
-  TextInput,
-  TouchableOpacity,
   StyleSheet,
-  ScrollView,
-  Alert,
-  ActivityIndicator,
-  Modal,
   FlatList,
+  RefreshControl,
+  TouchableOpacity,
+  Alert,
 } from 'react-native';
-import { router } from 'expo-router';
-import api from '../../src/services/api';
+import { useAuth } from '../../src/hooks/useAuth';
 import { Ionicons } from '@expo/vector-icons';
-import { Service, Vehicle, ServicePricing } from '../../src/types';
+import api from '../../src/services/api';
+import { LoadingSpinner } from '../../components/LoadingSpinner';
+import { EmptyState } from '../../components/EmptyState';
 
-export default function CreateJobScreen() {
-  const [plateNumber, setPlateNumber] = useState('');
-  const [selectedService, setSelectedService] = useState<number | null>(null);
-  const [selectedVehicle, setSelectedVehicle] = useState<number | null>(null);
-  const [calculatedPrice, setCalculatedPrice] = useState<number | null>(null);
-  const [priceError, setPriceError] = useState<string | null>(null);
-  
+interface Service {
+  id: number;
+  name: string;
+  price: string;
+  duration: number;
+}
+
+interface Vehicle {
+  id: number;
+  name: string;
+}
+
+interface Job {
+  id: number;
+  plate_number: string;
+  service: number;
+  vehicle_type: number;
+  price: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'paid';
+  assigned_staff?: number | null;
+  created_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+type JobStatus = 'pending' | 'in_progress' | 'completed' | 'paid';
+
+export default function JobsScreen() {
+  const [activeTab, setActiveTab] = useState<JobStatus>('pending');
+  const [jobs, setJobs] = useState<Job[]>([]);
   const [services, setServices] = useState<Service[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
-  const [pricing, setPricing] = useState<ServicePricing[]>([]);
-  
   const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-  
-  // Dropdown states
-  const [showServiceDropdown, setShowServiceDropdown] = useState(false);
-  const [showVehicleDropdown, setShowVehicleDropdown] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+  const { role } = useAuth();
 
   useEffect(() => {
-    fetchInitialData();
+    loadInitialData();
   }, []);
 
-  useEffect(() => {
-    calculatePrice();
-  }, [selectedService, selectedVehicle]);
-
-  const fetchInitialData = async () => {
-    setLoading(true);
+  const loadInitialData = async () => {
     try {
-      const [servicesRes, vehiclesRes, pricingRes] = await Promise.all([
+      const [servicesRes, vehiclesRes] = await Promise.all([
         api.get('/services/'),
         api.get('/vehicles/'),
-        api.get('/pricing/'), // This returns ServicePricing objects
       ]);
-      
       setServices(servicesRes.data);
       setVehicles(vehiclesRes.data);
-      setPricing(pricingRes.data);
+      await fetchJobs('pending');
     } catch (error) {
-      console.error('Error fetching data:', error);
-      Alert.alert('Error', 'Failed to load data. Please check your connection.');
+      console.error('Error loading initial data:', error);
+      Alert.alert('Error', 'Failed to load data');
     } finally {
       setLoading(false);
     }
   };
 
-  const calculatePrice = () => {
-    if (!selectedService || !selectedVehicle) {
-      setCalculatedPrice(null);
-      setPriceError(null);
-      return;
-    }
-
-    // Find matching pricing entry from ServicePricing
-    const priceEntry = pricing.find(
-      p => p.service === selectedService && p.vehicle_type === selectedVehicle
-    );
-
-    if (priceEntry) {
-      setCalculatedPrice(priceEntry.price);
-      setPriceError(null);
-    } else {
-      setCalculatedPrice(null);
-      setPriceError('Pricing not configured for this service and vehicle combination');
-    }
-  };
-
-  const handleSubmit = async () => {
-    // Validation
-    if (!plateNumber.trim()) {
-      Alert.alert('Validation Error', 'Please enter plate number');
-      return;
-    }
-    
-    if (!selectedService) {
-      Alert.alert('Validation Error', 'Please select a service');
-      return;
-    }
-    
-    if (!selectedVehicle) {
-      Alert.alert('Validation Error', 'Please select a vehicle type');
-      return;
-    }
-    
-    if (priceError) {
-      Alert.alert('Validation Error', `Cannot create job: ${priceError}`);
-      return;
-    }
-
-    setSubmitting(true);
+  const fetchJobs = async (status: string) => {
     try {
-      // Send exactly what backend expects
-      const jobData = {
-        plate_number: plateNumber.toUpperCase().trim(),
-        service: selectedService,
-        vehicle_type: selectedVehicle,
-      };
-      
-      console.log('Creating job with data:', jobData);
-      
-      const response = await api.post('/jobs/', jobData);
-      
-      Alert.alert(
-        'Success', 
-        `Job created successfully!\nPrice: KES ${calculatedPrice?.toLocaleString()}`,
-        [{ text: 'OK', onPress: () => router.back() }]
-      );
-    } catch (error: any) {
-      console.error('Error creating job:', error.response?.data || error);
-      
-      const errorMessage = error.response?.data?.message || 
-                          error.response?.data?.detail || 
-                          'Failed to create job. Please try again.';
-      
-      Alert.alert('Error', errorMessage);
-    } finally {
-      setSubmitting(false);
+      const response = await api.get(`/jobs/?status=${status}`);
+      setJobs(response.data);
+    } catch (error) {
+      console.error('Error fetching jobs:', error);
+      Alert.alert('Error', 'Failed to load jobs');
     }
   };
 
-  const getServiceName = (id: number) => {
-    const service = services.find(s => s.id === id);
-    return service?.name || 'Select service';
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await fetchJobs(activeTab);
+    setRefreshing(false);
   };
 
-  const getVehicleName = (id: number) => {
-    const vehicle = vehicles.find(v => v.id === id);
-    return vehicle?.name || 'Select vehicle';
+  const startJob = async (jobId: number) => {
+    try {
+      await api.post(`/jobs/${jobId}/start/`);
+      await fetchJobs(activeTab);
+      Alert.alert('Success', 'Job started successfully');
+    } catch (error) {
+      Alert.alert('Error', 'Failed to start job');
+    }
   };
 
-  const filteredServices = services.filter(service =>
-    service.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const completeJob = async (jobId: number) => {
+    try {
+      await api.patch(`/jobs/${jobId}/complete/`);
+      await fetchJobs(activeTab);
+      Alert.alert('Success', 'Job completed successfully');
+    } catch (error) {
+      Alert.alert('Error', 'Failed to complete job');
+    }
+  };
 
-  const filteredVehicles = vehicles.filter(vehicle =>
-    vehicle.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const getServiceName = (serviceId: number) => {
+    const service = services.find(s => s.id === serviceId);
+    return service?.name || 'Loading...';
+  };
 
-  if (loading) {
+  const getVehicleName = (vehicleId: number) => {
+    const vehicle = vehicles.find(v => v.id === vehicleId);
+    return vehicle?.name || 'Loading...';
+  };
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'pending':
+        return '#fef3c7';
+      case 'in_progress':
+        return '#dbeafe';
+      case 'completed':
+        return '#d1fae5';
+      case 'paid':
+        return '#a7f3d0';
+      default:
+        return '#f3f4f6';
+    }
+  };
+
+  const getStatusTextColor = (status: string) => {
+    switch (status) {
+      case 'pending':
+        return '#92400e';
+      case 'in_progress':
+        return '#1e40af';
+      case 'completed':
+        return '#065f46';
+      case 'paid':
+        return '#065f46';
+      default:
+        return '#374151';
+    }
+  };
+
+  const getStatusText = (status: string) => {
+    switch (status) {
+      case 'pending':
+        return 'Pending';
+      case 'in_progress':
+        return 'In Progress';
+      case 'completed':
+        return 'Complete';
+      case 'paid':
+        return 'Paid ✓';
+      default:
+        return status;
+    }
+  };
+
+  const formatTime = (dateString: string) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+    const hours = Math.floor(diff / (1000 * 60 * 60));
+    
+    if (hours < 1) return 'Just now';
+    if (hours < 24) return `${hours}h ago`;
+    return date.toLocaleDateString();
+  };
+
+  const renderJobCard = ({ item }: { item: Job }) => {
+    const showActionButton = item.status !== 'completed' && item.status !== 'paid';
+    const buttonText = item.status === 'pending' ? 'Start Job' : 'Complete Job';
+    const buttonAction = item.status === 'pending' ? startJob : completeJob;
+
     return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#3b82f6" />
-        <Text style={styles.loadingText}>Loading services and pricing...</Text>
+      <View style={styles.card}>
+        <View style={styles.cardHeader}>
+          <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.status) }]}>
+            <Text style={[styles.statusText, { color: getStatusTextColor(item.status) }]}>
+              {getStatusText(item.status)}
+            </Text>
+          </View>
+          <Text style={styles.timeText}>{formatTime(item.created_at)}</Text>
+        </View>
+
+        <View style={styles.cardContent}>
+          {/* Plate Number */}
+          <View style={styles.plateContainer}>
+            <Ionicons name="car-outline" size={22} color="#3b82f6" />
+            <Text style={styles.plateNumber}>{item.plate_number}</Text>
+          </View>
+
+          {/* Service and Vehicle Row */}
+          <View style={styles.detailsRow}>
+            <View style={styles.detailItem}>
+              <Text style={styles.detailLabel}>Service</Text>
+              <Text style={styles.detailValue}>{getServiceName(item.service)}</Text>
+            </View>
+            <View style={styles.detailItem}>
+              <Text style={styles.detailLabel}>Vehicle</Text>
+              <Text style={styles.detailValue}>{getVehicleName(item.vehicle_type)}</Text>
+            </View>
+          </View>
+
+          {/* Price */}
+          <View style={styles.priceContainer}>
+            <Ionicons name="cash-outline" size={18} color="#059669" />
+            <Text style={styles.priceLabel}>Amount:</Text>
+            <Text style={styles.priceValue}>
+              KES {parseFloat(item.price).toLocaleString()}
+            </Text>
+          </View>
+        </View>
+
+        {showActionButton && (
+          <TouchableOpacity
+            style={[
+              styles.actionButton,
+              item.status === 'pending' ? styles.startButton : styles.completeButton
+            ]}
+            onPress={() => buttonAction(item.id)}
+          >
+            <Text style={styles.actionButtonText}>{buttonText}</Text>
+            <Ionicons 
+              name={item.status === 'pending' ? 'play-circle' : 'checkmark-circle'} 
+              size={20} 
+              color="#fff" 
+            />
+          </TouchableOpacity>
+        )}
+
+        {item.status === 'completed' && (
+          <TouchableOpacity
+            style={[styles.actionButton, styles.paymentButton]}
+            onPress={() => Alert.alert('Coming Soon', 'Payment processing will be available soon')}
+          >
+            <Text style={styles.actionButtonText}>Process Payment</Text>
+            <Ionicons name="cash-outline" size={20} color="#fff" />
+          </TouchableOpacity>
+        )}
+
+        {item.status === 'paid' && (
+          <View style={[styles.actionButton, styles.paidButton]}>
+            <Ionicons name="checkmark-done-circle" size={20} color="#fff" />
+            <Text style={styles.actionButtonText}>Payment Received</Text>
+          </View>
+        )}
       </View>
     );
+  };
+
+  const tabs = [
+    { key: 'pending', label: 'Pending', icon: 'time-outline' },
+    { key: 'in_progress', label: 'In Progress', icon: 'play-circle-outline' },
+    { key: 'completed', label: 'Completed', icon: 'checkmark-circle-outline' },
+    { key: 'paid', label: 'Paid', icon: 'cash-outline' },
+  ];
+
+  const handleTabChange = async (tabKey: JobStatus) => {
+    setActiveTab(tabKey);
+    await fetchJobs(tabKey);
+  };
+
+  if (loading) {
+    return <LoadingSpinner />;
   }
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+    <View style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-          <Ionicons name="arrow-back" size={24} color="#1f2937" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Create New Job</Text>
-        <View style={styles.placeholder} />
+        <Text style={styles.title}>Jobs</Text>
+        {role === 'owner' && (
+          <TouchableOpacity style={styles.createButton}>
+            <Ionicons name="add-circle" size={32} color="#3b82f6" />
+          </TouchableOpacity>
+        )}
       </View>
 
-      <View style={styles.form}>
-        {/* Plate Number Input */}
-        <View style={styles.inputGroup}>
-          <Text style={styles.label}>
-            Plate Number <Text style={styles.required}>*</Text>
-          </Text>
-          <View style={styles.inputContainer}>
-            <Ionicons name="car-outline" size={20} color="#9ca3af" style={styles.inputIcon} />
-            <TextInput
-              style={styles.input}
-              placeholder="e.g., KDA 123A"
-              placeholderTextColor="#9ca3af"
-              value={plateNumber}
-              onChangeText={setPlateNumber}
-              autoCapitalize="characters"
-              autoCorrect={false}
-              editable={!submitting}
+      <View style={styles.tabsContainer}>
+        {tabs.map((tab) => (
+          <TouchableOpacity
+            key={tab.key}
+            style={[styles.tab, activeTab === tab.key && styles.tabActive]}
+            onPress={() => handleTabChange(tab.key as JobStatus)}
+          >
+            <Ionicons 
+              name={tab.icon as any} 
+              size={18} 
+              color={activeTab === tab.key ? '#3b82f6' : '#6b7280'} 
             />
-            {plateNumber.length > 0 && !submitting && (
-              <TouchableOpacity onPress={() => setPlateNumber('')}>
-                <Ionicons name="close-circle" size={20} color="#9ca3af" />
-              </TouchableOpacity>
-            )}
-          </View>
-        </View>
-
-        {/* Service Dropdown */}
-        <View style={styles.inputGroup}>
-          <Text style={styles.label}>
-            Service <Text style={styles.required}>*</Text>
-          </Text>
-          <TouchableOpacity
-            style={styles.dropdown}
-            onPress={() => {
-              if (!submitting) {
-                setShowServiceDropdown(true);
-                setSearchQuery('');
-              }
-            }}
-          >
-            <Text style={selectedService ? styles.dropdownText : styles.dropdownPlaceholder}>
-              {selectedService ? getServiceName(selectedService) : 'Select a service'}
+            <Text style={[styles.tabText, activeTab === tab.key && styles.tabTextActive]}>
+              {tab.label}
             </Text>
-            <Ionicons name="chevron-down" size={20} color="#6b7280" />
+            <View style={styles.tabBadge}>
+              <Text style={styles.tabBadgeText}>{jobs.length}</Text>
+            </View>
           </TouchableOpacity>
-        </View>
-
-        {/* Vehicle Type Dropdown */}
-        <View style={styles.inputGroup}>
-          <Text style={styles.label}>
-            Vehicle Type <Text style={styles.required}>*</Text>
-          </Text>
-          <TouchableOpacity
-            style={styles.dropdown}
-            onPress={() => {
-              if (!submitting && selectedService) {
-                setShowVehicleDropdown(true);
-                setSearchQuery('');
-              } else if (!selectedService) {
-                Alert.alert('Info', 'Please select a service first');
-              }
-            }}
-          >
-            <Text style={selectedVehicle ? styles.dropdownText : styles.dropdownPlaceholder}>
-              {selectedVehicle ? getVehicleName(selectedVehicle) : 'Select vehicle type'}
-            </Text>
-            <Ionicons name="chevron-down" size={20} color="#6b7280" />
-          </TouchableOpacity>
-          {!selectedService && (
-            <Text style={styles.hintText}>Select a service to see available vehicles</Text>
-          )}
-        </View>
-
-        {/* Price Preview Card */}
-        {(selectedService && selectedVehicle) && (
-          <View style={styles.priceCard}>
-            <View style={styles.priceHeader}>
-              <Ionicons name="calculator-outline" size={20} color="#3b82f6" />
-              <Text style={styles.priceTitle}>Price Preview</Text>
-            </View>
-            
-            {priceError ? (
-              <View style={styles.priceErrorContainer}>
-                <Ionicons name="alert-circle" size={24} color="#ef4444" />
-                <Text style={styles.priceErrorText}>{priceError}</Text>
-                <Text style={styles.priceErrorHint}>
-                  Please contact administrator to configure pricing for this combination.
-                </Text>
-              </View>
-            ) : (
-              <>
-                <View style={styles.priceBreakdown}>
-                  <Text style={styles.breakdownText}>
-                    {getServiceName(selectedService)} + {getVehicleName(selectedVehicle)}
-                  </Text>
-                  <View style={styles.priceDivider} />
-                  <View style={styles.priceTotal}>
-                    <Text style={styles.totalLabel}>Total Amount</Text>
-                    <View style={styles.totalAmount}>
-                      <Text style={styles.currencySymbol}>KES</Text>
-                      <Text style={styles.totalValue}>{calculatedPrice?.toLocaleString()}</Text>
-                    </View>
-                  </View>
-                </View>
-              </>
-            )}
-          </View>
-        )}
-
-        {/* Summary Section */}
-        {(plateNumber && selectedService && selectedVehicle && !priceError) && (
-          <View style={styles.summaryCard}>
-            <Text style={styles.summaryTitle}>Job Summary</Text>
-            <View style={styles.summaryRow}>
-              <Text style={styles.summaryLabel}>Plate Number:</Text>
-              <Text style={styles.summaryValue}>{plateNumber.toUpperCase()}</Text>
-            </View>
-            <View style={styles.summaryRow}>
-              <Text style={styles.summaryLabel}>Service:</Text>
-              <Text style={styles.summaryValue}>{getServiceName(selectedService)}</Text>
-            </View>
-            <View style={styles.summaryRow}>
-              <Text style={styles.summaryLabel}>Vehicle:</Text>
-              <Text style={styles.summaryValue}>{getVehicleName(selectedVehicle)}</Text>
-            </View>
-            <View style={[styles.summaryRow, styles.totalRow]}>
-              <Text style={styles.summaryLabel}>Total Price:</Text>
-              <Text style={styles.totalPriceValue}>KES {calculatedPrice?.toLocaleString()}</Text>
-            </View>
-          </View>
-        )}
-
-        {/* Submit Button */}
-        <TouchableOpacity
-          style={[
-            styles.submitButton,
-            (!plateNumber || !selectedService || !selectedVehicle || priceError || submitting) && 
-            styles.submitButtonDisabled
-          ]}
-          onPress={handleSubmit}
-          disabled={!plateNumber || !selectedService || !selectedVehicle || !!priceError || submitting}
-        >
-          {submitting ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <>
-              <Text style={styles.submitButtonText}>Create Job</Text>
-              <Ionicons name="checkmark-circle" size={20} color="#fff" />
-            </>
-          )}
-        </TouchableOpacity>
+        ))}
       </View>
 
-      {/* Service Selection Modal */}
-      <Modal
-        visible={showServiceDropdown}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setShowServiceDropdown(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Service</Text>
-              <TouchableOpacity onPress={() => setShowServiceDropdown(false)}>
-                <Ionicons name="close" size={24} color="#6b7280" />
-              </TouchableOpacity>
-            </View>
-            
-            <View style={styles.searchContainer}>
-              <Ionicons name="search" size={20} color="#9ca3af" />
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Search services..."
-                placeholderTextColor="#9ca3af"
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                autoFocus
-              />
-            </View>
-
-            <FlatList
-              data={filteredServices}
-              keyExtractor={(item) => item.id.toString()}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={[
-                    styles.modalItem,
-                    selectedService === item.id && styles.modalItemActive
-                  ]}
-                  onPress={() => {
-                    setSelectedService(item.id);
-                    setSelectedVehicle(null); // Reset vehicle when service changes
-                    setCalculatedPrice(null);
-                    setShowServiceDropdown(false);
-                  }}
-                >
-                  <View style={styles.modalItemContent}>
-                    <Text style={[
-                      styles.modalItemText,
-                      selectedService === item.id && styles.modalItemTextActive
-                    ]}>
-                      {item.name}
-                    </Text>
-                    {item.description && (
-                      <Text style={styles.modalItemDescription}>{item.description}</Text>
-                    )}
-                  </View>
-                  {selectedService === item.id && (
-                    <Ionicons name="checkmark-circle" size={22} color="#3b82f6" />
-                  )}
-                </TouchableOpacity>
-              )}
-              style={styles.modalList}
-              showsVerticalScrollIndicator={false}
-            />
-          </View>
-        </View>
-      </Modal>
-
-      {/* Vehicle Type Selection Modal */}
-      <Modal
-        visible={showVehicleDropdown}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setShowVehicleDropdown(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Vehicle Type</Text>
-              <TouchableOpacity onPress={() => setShowVehicleDropdown(false)}>
-                <Ionicons name="close" size={24} color="#6b7280" />
-              </TouchableOpacity>
-            </View>
-            
-            <View style={styles.searchContainer}>
-              <Ionicons name="search" size={20} color="#9ca3af" />
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Search vehicle types..."
-                placeholderTextColor="#9ca3af"
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                autoFocus
-              />
-            </View>
-
-            <FlatList
-              data={filteredVehicles}
-              keyExtractor={(item) => item.id.toString()}
-              renderItem={({ item }) => {
-                // Check if pricing exists for this vehicle with selected service
-                const hasPricing = pricing.some(
-                  p => p.service === selectedService && p.vehicle_type === item.id
-                );
-                
-                return (
-                  <TouchableOpacity
-                    style={[
-                      styles.modalItem,
-                      selectedVehicle === item.id && styles.modalItemActive,
-                      !hasPricing && styles.modalItemDisabled
-                    ]}
-                    onPress={() => {
-                      if (hasPricing) {
-                        setSelectedVehicle(item.id);
-                        setShowVehicleDropdown(false);
-                      }  else {
-                          // Safe way to show the alert
-                          const serviceName = selectedService 
-                            ? getServiceName(selectedService) 
-                            : 'the selected service';
-                          
-                          Alert.alert(
-                            'Pricing Not Available',
-                            `No pricing configured for ${serviceName} on ${item.name}. Please contact administrator.`
-                          );
-                        }
-                    }}
-                  >
-                    <View style={styles.modalItemContent}>
-                      <Text style={[
-                        styles.modalItemText,
-                        selectedVehicle === item.id && styles.modalItemTextActive,
-                        !hasPricing && styles.modalItemTextDisabled
-                      ]}>
-                        {item.name}
-                      </Text>
-                      {!hasPricing && (
-                        <Text style={styles.modalItemWarning}>No pricing available</Text>
-                      )}
-                    </View>
-                    {selectedVehicle === item.id && hasPricing && (
-                      <Ionicons name="checkmark-circle" size={22} color="#3b82f6" />
-                    )}
-                  </TouchableOpacity>
-                );
-              }}
-              style={styles.modalList}
-              showsVerticalScrollIndicator={false}
-            />
-          </View>
-        </View>
-      </Modal>
-    </ScrollView>
+      <FlatList
+        data={jobs}
+        keyExtractor={(item) => item.id.toString()}
+        renderItem={renderJobCard}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#3b82f6"
+          />
+        }
+        contentContainerStyle={styles.listContent}
+        ListEmptyComponent={
+          <EmptyState
+            title={`No ${activeTab.replace('_', ' ')} jobs`}
+            message="All caught up! New jobs will appear here."
+          />
+        }
+      />
+    </View>
   );
 }
 
@@ -489,306 +333,185 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f9fafb',
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#f9fafb',
-  },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 14,
-    color: '#6b7280',
-  },
   header: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
+    alignItems: 'center',
     paddingHorizontal: 16,
     paddingTop: 12,
-    paddingBottom: 16,
+    paddingBottom: 8,
     backgroundColor: '#fff',
     borderBottomWidth: 1,
     borderBottomColor: '#e5e7eb',
   },
-  backButton: {
-    padding: 8,
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: '600',
+  title: {
+    fontSize: 28,
+    fontWeight: '700',
     color: '#1f2937',
   },
-  placeholder: {
-    width: 40,
+  createButton: {
+    padding: 4,
   },
-  form: {
-    padding: 16,
+  tabsContainer: {
+    flexDirection: 'row',
+    backgroundColor: '#fff',
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
   },
-  inputGroup: {
-    marginBottom: 20,
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#374151',
-    marginBottom: 8,
-  },
-  required: {
-    color: '#ef4444',
-  },
-  hintText: {
-    fontSize: 12,
-    color: '#9ca3af',
-    marginTop: 6,
-    marginLeft: 4,
-  },
-  inputContainer: {
+  tab: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    borderRadius: 8,
+    paddingVertical: 8,
     paddingHorizontal: 12,
-    height: 50,
-  },
-  inputIcon: {
-    marginRight: 8,
-  },
-  input: {
-    flex: 1,
-    fontSize: 16,
-    color: '#1f2937',
-    paddingVertical: 12,
-  },
-  dropdown: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
+    marginRight: 4,
     borderRadius: 8,
-    paddingHorizontal: 12,
-    height: 50,
+    gap: 6,
   },
-  dropdownText: {
-    fontSize: 16,
-    color: '#1f2937',
-  },
-  dropdownPlaceholder: {
-    fontSize: 16,
-    color: '#9ca3af',
-  },
-  priceCard: {
+  tabActive: {
     backgroundColor: '#eff6ff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: '#bfdbfe',
   },
-  priceHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-    gap: 8,
-  },
-  priceTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#1e40af',
-  },
-  priceBreakdown: {
-    gap: 12,
-  },
-  breakdownText: {
-    fontSize: 14,
-    color: '#3b82f6',
-    textAlign: 'center',
-  },
-  priceDivider: {
-    height: 1,
-    backgroundColor: '#bfdbfe',
-  },
-  priceTotal: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'baseline',
-  },
-  totalLabel: {
-    fontSize: 14,
+  tabText: {
+    fontSize: 13,
     fontWeight: '500',
-    color: '#1e40af',
-  },
-  totalAmount: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: 4,
-  },
-  currencySymbol: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#1e40af',
-  },
-  totalValue: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#1e40af',
-  },
-  priceErrorContainer: {
-    alignItems: 'center',
-    paddingVertical: 12,
-    gap: 8,
-  },
-  priceErrorText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#ef4444',
-    textAlign: 'center',
-  },
-  priceErrorHint: {
-    fontSize: 12,
-    color: '#9ca3af',
-    textAlign: 'center',
-  },
-  summaryCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-  },
-  summaryTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#1f2937',
-    marginBottom: 12,
-  },
-  summaryRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  summaryLabel: {
-    fontSize: 14,
     color: '#6b7280',
   },
-  summaryValue: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#1f2937',
+  tabTextActive: {
+    color: '#3b82f6',
   },
-  totalRow: {
-    marginTop: 8,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#e5e7eb',
-  },
-  totalPriceValue: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#10b981',
-  },
-  submitButton: {
-    flexDirection: 'row',
-    backgroundColor: '#3b82f6',
-    borderRadius: 12,
-    paddingVertical: 16,
+  tabBadge: {
+    marginLeft: 4,
+    backgroundColor: '#e5e7eb',
+    borderRadius: 10,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    minWidth: 20,
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    marginTop: 8,
   },
-  submitButtonDisabled: {
-    backgroundColor: '#9ca3af',
-  },
-  submitButtonText: {
-    color: '#fff',
-    fontSize: 16,
+  tabBadgeText: {
+    fontSize: 11,
     fontWeight: '600',
+    color: '#4b5563',
   },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'flex-end',
+  listContent: {
+    padding: 16,
   },
-  modalContent: {
+  card: {
     backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    maxHeight: '80%',
+    borderRadius: 12,
+    marginBottom: 12,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
   },
-  modalHeader: {
+  cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#1f2937',
-  },
-  searchContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f3f4f6',
-    margin: 16,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    height: 44,
-  },
-  searchInput: {
-    flex: 1,
-    marginLeft: 8,
-    fontSize: 16,
-    color: '#1f2937',
-  },
-  modalList: {
-    maxHeight: 400,
-  },
-  modalItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 8,
     borderBottomWidth: 1,
     borderBottomColor: '#f3f4f6',
   },
-  modalItemActive: {
-    backgroundColor: '#eff6ff',
+  statusBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
   },
-  modalItemDisabled: {
-    opacity: 0.5,
+  statusText: {
+    fontSize: 12,
+    fontWeight: '600',
   },
-  modalItemContent: {
-    flex: 1,
-  },
-  modalItemText: {
-    fontSize: 16,
-    color: '#1f2937',
-  },
-  modalItemTextActive: {
-    color: '#3b82f6',
-    fontWeight: '500',
-  },
-  modalItemTextDisabled: {
+  timeText: {
+    fontSize: 12,
     color: '#9ca3af',
   },
-  modalItemDescription: {
-    fontSize: 12,
-    color: '#6b7280',
-    marginTop: 2,
+  cardContent: {
+    padding: 16,
   },
-  modalItemWarning: {
+  plateContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    gap: 8,
+  },
+  plateNumber: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1f2937',
+  },
+  detailsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+    gap: 12,
+  },
+  detailItem: {
+    flex: 1,
+    backgroundColor: '#f9fafb',
+    padding: 10,
+    borderRadius: 8,
+  },
+  detailLabel: {
     fontSize: 11,
-    color: '#ef4444',
-    marginTop: 2,
+    fontWeight: '500',
+    color: '#9ca3af',
+    marginBottom: 4,
+    textTransform: 'uppercase',
+  },
+  detailValue: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#374151',
+  },
+  priceContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ecfdf5',
+    padding: 10,
+    borderRadius: 8,
+    gap: 6,
+  },
+  priceLabel: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#065f46',
+  },
+  priceValue: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#065f46',
+  },
+  actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    margin: 12,
+    borderRadius: 8,
+    gap: 8,
+  },
+  startButton: {
+    backgroundColor: '#3b82f6',
+  },
+  completeButton: {
+    backgroundColor: '#10b981',
+  },
+  paymentButton: {
+    backgroundColor: '#f59e0b',
+  },
+  paidButton: {
+    backgroundColor: '#10b981',
+    opacity: 0.7,
+  },
+  actionButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
   },
 });

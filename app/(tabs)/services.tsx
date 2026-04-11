@@ -316,15 +316,14 @@ export default function ServicesScreen() {
         <View style={styles.pricingTable}>
           <View style={styles.pricingHeader}>
             <Text style={styles.pricingHeaderText}>Vehicle Type</Text>
-            <Text style={styles.pricingHeaderText}>Price (KES)</Text>
-            <Text style={styles.pricingHeaderText}>vs Base</Text>
+            <Text style={styles.pricingHeaderText}>Price (KES)</Text>            
             <View style={{ width: 70 }} />
           </View>
           
           {vehicles.map((vehicle) => {
             const vehiclePrice = getPriceForVehicle(item, vehicle.id);
             const existingPricing = servicePricing.find(p => p.vehicle_type === vehicle.id);
-            const priceDifference = vehiclePrice - basePrice;
+            
             
             return (
               <View key={vehicle.id} style={styles.pricingRow}>
@@ -335,16 +334,7 @@ export default function ServicesScreen() {
                 ]}>
                   KES {vehiclePrice.toLocaleString()}
                 </Text>
-                <Text style={[
-                  styles.priceDifference,
-                  priceDifference > 0 && styles.higherPrice,
-                  priceDifference < 0 && styles.lowerPrice,
-                  priceDifference === 0 && styles.samePrice
-                ]}>
-                  {priceDifference > 0 && `+${priceDifference}`}
-                  {priceDifference < 0 && `${priceDifference}`}
-                  {priceDifference === 0 && 'Base'}
-                </Text>
+                
                 <View style={styles.rowActions}>
                   <TouchableOpacity
                     onPress={() => openPricingModal(item, vehicle, existingPricing)}

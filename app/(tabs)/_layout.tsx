@@ -3,7 +3,7 @@ import React from 'react';
 import { Tabs } from 'expo-router';
 import { useAuth } from '../../src/hooks/useAuth';
 import { Ionicons } from '@expo/vector-icons';
-import { View, ActivityIndicator } from 'react-native';
+import { View, ActivityIndicator, Text, Platform } from 'react-native';
 
 export default function TabLayout() {
   const { role, loading } = useAuth();
@@ -12,6 +12,7 @@ export default function TabLayout() {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
         <ActivityIndicator size="large" color="#3b82f6" />
+        <Text style={{ marginTop: 12, color: '#6b7280' }}>Loading...</Text>
       </View>
     );
   }
@@ -20,73 +21,63 @@ export default function TabLayout() {
 
   return (
     <Tabs
-      screenOptions={{
-        headerShown: false,
-        tabBarActiveTintColor: '#3b82f6',
-        tabBarInactiveTintColor: '#9ca3af',
-        tabBarStyle: {
-          backgroundColor: '#fff',
-          borderTopWidth: 1,
-          borderTopColor: '#e5e7eb',
-          height: 60,
-          paddingBottom: 8,
-          paddingTop: 8,
-        },
-      }}
-    >
+  screenOptions={{
+    headerShown: false,
+    tabBarActiveTintColor: '#3b82f6',
+    tabBarInactiveTintColor: '#9ca3af',
+    tabBarStyle: {
+      backgroundColor: '#fff',
+      borderTopWidth: 1,
+      borderTopColor: '#e5e7eb',
+      height: Platform.OS === 'ios' ? 85 : 65,
+      paddingBottom: Platform.OS === 'ios' ? 25 : 8,
+      paddingTop: 8,
+    },
+  }}
+>
+  <Tabs.Screen
+    name="jobs"
+    options={{
+      title: 'Jobs',
+      tabBarIcon: ({ color, size }) => (
+        <Ionicons name="briefcase" size={size} color={color} />
+      ),
+    }}
+  />
+
+  <Tabs.Screen
+    name="create-job"
+    options={{
+      title: 'New Job',
+      tabBarIcon: ({ color, size }) => (
+        <Ionicons name="add-circle" size={size} color={color} />
+      ),
+    }}
+  />
+
+  {isOwner && (
+    <>
       <Tabs.Screen
-        name="jobs"
+        name="dashboard"
         options={{
-          title: 'Jobs',
+          title: 'Dashboard',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="briefcase" size={size} color={color} />
+            <Ionicons name="stats-chart" size={size} color={color} />
           ),
         }}
       />
-      
+
       <Tabs.Screen
-        name="create-job"
+        name="manage"
         options={{
-          title: 'New Job',
+          title: 'Manage',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="add-circle" size={size} color={color} />
+            <Ionicons name="settings" size={size} color={color} />
           ),
         }}
       />
-      
-      {isOwner && (
-        <>
-          <Tabs.Screen
-            name="dashboard"
-            options={{
-              title: 'Dashboard',
-              tabBarIcon: ({ color, size }) => (
-                <Ionicons name="stats-chart" size={size} color={color} />
-              ),
-            }}
-          />
-          
-          <Tabs.Screen
-            name="users"
-            options={{
-              title: 'Users',
-              tabBarIcon: ({ color, size }) => (
-                <Ionicons name="people" size={size} color={color} />
-              ),
-            }}
-          />
-          
-          <Tabs.Screen
-            name="services"
-            options={{
-              title: 'Services',
-              tabBarIcon: ({ color, size }) => (
-                <Ionicons name="car-sport" size={size} color={color} />
-              ),
-            }}
-          />
-        </>
-      )}
-    </Tabs>
+    </>
+  )}
+</Tabs>
   );
 }
