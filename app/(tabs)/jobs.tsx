@@ -13,9 +13,9 @@ import { useAuth } from '../../src/hooks/useAuth';
 import { Ionicons } from '@expo/vector-icons';
 import api from '../../src/services/api';
 import { Job } from '../../src/types';
-import { JobCard } from '../../src/components/JobCard';
-import { LoadingSpinner } from '../../src/components/LoadingSpinner';
-import { EmptyState } from '../../src/components/EmptyState';
+import { JobCard } from '../../components/JobCard';
+import { LoadingSpinner } from '../../components/LoadingSpinner';
+import { EmptyState } from '../../components/EmptyState';
 
 type JobStatus = 'pending' | 'in_progress' | 'completed' | 'paid';
 

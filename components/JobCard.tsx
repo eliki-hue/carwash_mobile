@@ -6,7 +6,7 @@ import {
   StyleSheet,
   TouchableOpacity,
 } from 'react-native';
-import { Job } from '../types';
+import { Job } from '../src/types';
 import { Ionicons } from '@expo/vector-icons';
 import { PaymentModal } from './PaymentModal';
 
@@ -47,26 +47,11 @@ export const JobCard: React.FC<JobCardProps> = ({
       case 'in_progress':
         return 'In Progress';
       case 'completed':
-        return 'Completed';
+        return 'Complete';
       case 'paid':
         return 'Paid ✓';
       default:
         return job.status;
-    }
-  };
-
-  const getStatusTextColor = () => {
-    switch (job.status) {
-      case 'pending':
-        return '#92400e';
-      case 'in_progress':
-        return '#1e40af';
-      case 'completed':
-        return '#065f46';
-      case 'paid':
-        return '#065f46';
-      default:
-        return '#374151';
     }
   };
 
@@ -119,7 +104,7 @@ export const JobCard: React.FC<JobCardProps> = ({
           onPress={() => setShowPaymentModal(true)}
         >
           <Ionicons name="cash-outline" size={20} color="#fff" />
-          <Text style={styles.actionButtonText}>Process Payment</Text>
+          <Text style={styles.actionButtonText}>Take Payment</Text>
         </TouchableOpacity>
       );
     }
@@ -141,9 +126,7 @@ export const JobCard: React.FC<JobCardProps> = ({
       <View style={styles.card}>
         <View style={styles.cardHeader}>
           <View style={[styles.statusBadge, getStatusColor()]}>
-            <Text style={[styles.statusText, { color: getStatusTextColor() }]}>
-              {getStatusText()}
-            </Text>
+            <Text style={styles.statusText}>{getStatusText()}</Text>
           </View>
           <Text style={styles.timeText}>{formatTime(job.created_at)}</Text>
         </View>
@@ -154,12 +137,12 @@ export const JobCard: React.FC<JobCardProps> = ({
             <Text style={styles.plateNumber}>{job.plate_number}</Text>
           </View>
 
-          <View style={styles.detailsGrid}>
-            <View style={styles.detailBox}>
+          <View style={styles.detailsRow}>
+            <View style={styles.detailItem}>
               <Text style={styles.detailLabel}>Service</Text>
               <Text style={styles.detailValue}>{job.service_name || 'Loading...'}</Text>
             </View>
-            <View style={styles.detailBox}>
+            <View style={styles.detailItem}>
               <Text style={styles.detailLabel}>Vehicle</Text>
               <Text style={styles.detailValue}>{job.vehicle_name || 'Loading...'}</Text>
             </View>
@@ -170,13 +153,6 @@ export const JobCard: React.FC<JobCardProps> = ({
               <Ionicons name="cash-outline" size={18} color="#059669" />
               <Text style={styles.priceLabel}>Amount:</Text>
               <Text style={styles.priceValue}>KES {job.price.toLocaleString()}</Text>
-            </View>
-          )}
-
-          {job.assigned_staff_name && (
-            <View style={styles.staffContainer}>
-              <Ionicons name="person-circle-outline" size={16} color="#9ca3af" />
-              <Text style={styles.staffText}>Assigned: {job.assigned_staff_name}</Text>
             </View>
           )}
         </View>
@@ -191,6 +167,8 @@ export const JobCard: React.FC<JobCardProps> = ({
         jobId={job.id}
         amount={job.price || 0}
         plateNumber={job.plate_number}
+        serviceName={job.service_name || 'Service'}
+        vehicleName={job.vehicle_name || 'Vehicle'}
       />
     </>
   );
@@ -238,6 +216,7 @@ const styles = StyleSheet.create({
   statusText: {
     fontSize: 12,
     fontWeight: '600',
+    color: '#1f2937',
   },
   timeText: {
     fontSize: 12,
@@ -249,22 +228,21 @@ const styles = StyleSheet.create({
   plateContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 12,
     gap: 8,
   },
   plateNumber: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '700',
     color: '#1f2937',
-    letterSpacing: 0.5,
   },
-  detailsGrid: {
+  detailsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginBottom: 12,
     gap: 12,
   },
-  detailBox: {
+  detailItem: {
     flex: 1,
     backgroundColor: '#f9fafb',
     padding: 10,
@@ -288,7 +266,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#ecfdf5',
     padding: 10,
     borderRadius: 8,
-    marginTop: 4,
     gap: 6,
   },
   priceLabel: {
@@ -300,16 +277,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     color: '#065f46',
-  },
-  staffContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 8,
-    gap: 6,
-  },
-  staffText: {
-    fontSize: 12,
-    color: '#9ca3af',
   },
   actionButton: {
     flexDirection: 'row',

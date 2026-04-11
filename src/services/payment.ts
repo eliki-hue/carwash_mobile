@@ -1,9 +1,9 @@
 // src/services/payment.ts
 import api from './api';
-import { Payment, MpesaSTKPushRequest } from '../types';
+import { Payment } from '../types';
 
 export const paymentService = {
-  // Process cash payment
+  // Cash payment
   async processCashPayment(jobId: number): Promise<Payment> {
     const response = await api.post('/payments/', {
       job: jobId,
@@ -12,19 +12,23 @@ export const paymentService = {
     return response.data;
   },
 
-  // Initiate M-Pesa STK Push
-  async initiateMpesaPayment(jobId: number, phoneNumber: string): Promise<any> {
-    const response = await api.post('/payments/mpesa/stkpush/', {
+  // Manual M-Pesa payment (with transaction ID)
+  async processManualMpesaPayment(jobId: number, transactionId: string): Promise<Payment> {
+    const response = await api.post('/payments/', {
       job: jobId,
-      phone_number: phoneNumber,
+      method: 'mpesa_manual',
+      transaction_id: transactionId,
     });
     return response.data;
   },
 
-  // Check payment status
-  async checkPaymentStatus(jobId: number): Promise<Payment> {
-    const response = await api.get(`/payments/?job=${jobId}`);
-    return response.data[0];
+  // STK Push payment
+  async initiateSTKPush(jobId: number, phoneNumber: string): Promise<any> {
+    const response = await api.post('/payments/mpesa_stkpush/', {
+      job: jobId,
+      phone_number: phoneNumber,
+    });
+    return response.data;
   },
 
   // Get payment by job

@@ -1,4 +1,4 @@
-// app/(tabs)/services.tsx
+// app/(tabs)/services.tsx - Fixed Add Vehicle Pricing Modal
 import React, { useState, useEffect } from 'react';
 import {
   View,
@@ -44,6 +44,7 @@ export default function ServicesScreen() {
   // Modal states
   const [showServiceModal, setShowServiceModal] = useState(false);
   const [showPricingModal, setShowPricingModal] = useState(false);
+  const [showPriceEditModal, setShowPriceEditModal] = useState(false);
   const [selectedService, setSelectedService] = useState<Service | null>(null);
   const [editingPricing, setEditingPricing] = useState<ServicePricing | null>(null);
   
@@ -56,6 +57,10 @@ export default function ServicesScreen() {
   // Pricing form
   const [selectedVehicle, setSelectedVehicle] = useState<number | null>(null);
   const [priceAmount, setPriceAmount] = useState('');
+  
+  // Price edit form
+  const [editingServicePrice, setEditingServicePrice] = useState<Service | null>(null);
+  const [newBasePrice, setNewBasePrice] = useState('');
 
   useEffect(() => {
     fetchData();
@@ -132,39 +137,59 @@ export default function ServicesScreen() {
   };
 
   // Update base service price
-  const handleUpdateBasePrice = async (service: Service) => {
-    Alert.prompt(
-      'Update Base Price',
-      `Current base price: KES ${service.price}\nEnter new base price:`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Update',
-          onPress: async (newPrice) => {
-            if (!newPrice || parseFloat(newPrice) <= 0) {
-              Alert.alert('Error', 'Please enter a valid price');
-              return;
-            }
-            
-            try {
-              await api.patch(`/services/${service.id}/`, {
-                price: parseFloat(newPrice),
-              });
-              Alert.alert('Success', 'Base price updated successfully');
-              fetchData();
-            } catch (error) {
-              Alert.alert('Error', 'Failed to update base price');
-            }
-          }
-        }
-      ],
-      'plain-text',
-      undefined,
-      service.price.toString()
-    );
+  const handleUpdateBasePrice = () => {
+    if (!editingServicePrice) return;
+    
+    const priceValue = parseFloat(newBasePrice);
+    if (isNaN(priceValue) || priceValue <= 0) {
+      Alert.alert('Error', 'Please enter a valid price greater than 0');
+      return;
+    }
+    
+    setSubmitting(true);
+    api.patch(`/services/${editingServicePrice.id}/`, {
+      price: priceValue,
+    })
+      .then(() => {
+        Alert.alert('Success', 'Base price updated successfully');
+        setShowPriceEditModal(false);
+        setEditingServicePrice(null);
+        setNewBasePrice('');
+        fetchData();
+      })
+      .catch(() => {
+        Alert.alert('Error', 'Failed to update base price');
+      })
+      .finally(() => {
+        setSubmitting(false);
+      });
   };
 
-  // Add or update vehicle-specific pricing
+  // Open pricing modal for adding/editing vehicle pricing
+  const openPricingModal = (service: Service, vehicle?: Vehicle, existingPricing?: ServicePricing) => {
+    setSelectedService(service);
+    
+    if (existingPricing) {
+      // Edit existing pricing
+      setEditingPricing(existingPricing);
+      setSelectedVehicle(existingPricing.vehicle_type);
+      setPriceAmount(existingPricing.price.toString());
+    } else if (vehicle) {
+      // Add pricing for specific vehicle
+      setEditingPricing(null);
+      setSelectedVehicle(vehicle.id);
+      setPriceAmount(service.price); // Pre-fill with base price
+    } else {
+      // Add pricing (no vehicle selected yet)
+      setEditingPricing(null);
+      setSelectedVehicle(null);
+      setPriceAmount('');
+    }
+    
+    setShowPricingModal(true);
+  };
+
+  // Save vehicle pricing (create or update)
   const handleSavePricing = async () => {
     if (!selectedService) {
       Alert.alert('Error', 'No service selected');
@@ -208,17 +233,10 @@ export default function ServicesScreen() {
     }
   };
 
-  const handleEditPricing = (pricingItem: ServicePricing) => {
-    setEditingPricing(pricingItem);
-    setSelectedVehicle(pricingItem.vehicle_type);
-    setPriceAmount(pricingItem.price.toString());
-    setShowPricingModal(true);
-  };
-
-  const handleDeletePricing = async (pricingId: number) => {
+  const handleDeletePricing = async (pricingId: number, vehicleName: string) => {
     Alert.alert(
       'Confirm Delete',
-      'Are you sure you want to remove this vehicle pricing? The service will use the base price for this vehicle.',
+      `Remove pricing for ${vehicleName}? The service will use the base price for this vehicle.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -256,10 +274,6 @@ export default function ServicesScreen() {
     return pricing.filter(p => p.service === serviceId);
   };
 
-  const getVehicleName = (vehicleId: number) => {
-    return vehicles.find(v => v.id === vehicleId)?.name || 'Unknown';
-  };
-
   const getPriceForVehicle = (service: Service, vehicleId: number) => {
     const specificPricing = pricing.find(
       p => p.service === service.id && p.vehicle_type === vehicleId
@@ -279,7 +293,11 @@ export default function ServicesScreen() {
             <View style={styles.basePriceContainer}>
               <Text style={styles.basePriceLabel}>Base Price:</Text>
               <Text style={styles.basePrice}>KES {basePrice.toLocaleString()}</Text>
-              <TouchableOpacity onPress={() => handleUpdateBasePrice(item)}>
+              <TouchableOpacity onPress={() => {
+                setEditingServicePrice(item);
+                setNewBasePrice(item.price.toString());
+                setShowPriceEditModal(true);
+              }}>
                 <Ionicons name="pencil" size={16} color="#3b82f6" />
               </TouchableOpacity>
             </View>
@@ -287,16 +305,10 @@ export default function ServicesScreen() {
           </View>
           <TouchableOpacity
             style={styles.addPricingButton}
-            onPress={() => {
-              setSelectedService(item);
-              setEditingPricing(null);
-              setSelectedVehicle(null);
-              setPriceAmount('');
-              setShowPricingModal(true);
-            }}
+            onPress={() => openPricingModal(item)}
           >
             <Ionicons name="add-circle" size={24} color="#3b82f6" />
-            <Text style={styles.addPricingText}>Add Vehicle Price</Text>
+            <Text style={styles.addPricingText}>Add Price</Text>
           </TouchableOpacity>
         </View>
 
@@ -306,12 +318,12 @@ export default function ServicesScreen() {
             <Text style={styles.pricingHeaderText}>Vehicle Type</Text>
             <Text style={styles.pricingHeaderText}>Price (KES)</Text>
             <Text style={styles.pricingHeaderText}>vs Base</Text>
-            <View style={{ width: 40 }} />
+            <View style={{ width: 70 }} />
           </View>
           
           {vehicles.map((vehicle) => {
             const vehiclePrice = getPriceForVehicle(item, vehicle.id);
-            const hasSpecificPricing = servicePricing.some(p => p.vehicle_type === vehicle.id);
+            const existingPricing = servicePricing.find(p => p.vehicle_type === vehicle.id);
             const priceDifference = vehiclePrice - basePrice;
             
             return (
@@ -319,7 +331,7 @@ export default function ServicesScreen() {
                 <Text style={styles.vehicleName}>{vehicle.name}</Text>
                 <Text style={[
                   styles.priceValue,
-                  hasSpecificPricing && styles.specificPrice
+                  existingPricing && styles.specificPrice
                 ]}>
                   KES {vehiclePrice.toLocaleString()}
                 </Text>
@@ -333,38 +345,26 @@ export default function ServicesScreen() {
                   {priceDifference < 0 && `${priceDifference}`}
                   {priceDifference === 0 && 'Base'}
                 </Text>
-                <TouchableOpacity
-                  onPress={() => {
-                    const specificPricing = servicePricing.find(p => p.vehicle_type === vehicle.id);
-                    if (specificPricing) {
-                      handleEditPricing(specificPricing);
-                    } else {
-                      setSelectedService(item);
-                      setSelectedVehicle(vehicle.id);
-                      setPriceAmount(basePrice.toString());
-                      setEditingPricing(null);
-                      setShowPricingModal(true);
-                    }
-                  }}
-                  style={styles.actionButton}
-                >
-                  <Ionicons 
-                    name={hasSpecificPricing ? "pencil" : "add-circle-outline"} 
-                    size={20} 
-                    color={hasSpecificPricing ? "#3b82f6" : "#10b981"} 
-                  />
-                </TouchableOpacity>
-                {hasSpecificPricing && (
+                <View style={styles.rowActions}>
                   <TouchableOpacity
-                    onPress={() => {
-                      const specificPricing = servicePricing.find(p => p.vehicle_type === vehicle.id);
-                      if (specificPricing) handleDeletePricing(specificPricing.id);
-                    }}
-                    style={styles.deleteButton}
+                    onPress={() => openPricingModal(item, vehicle, existingPricing)}
+                    style={styles.actionButton}
                   >
-                    <Ionicons name="trash-outline" size={18} color="#ef4444" />
+                    <Ionicons 
+                      name={existingPricing ? "pencil" : "add-circle-outline"} 
+                      size={20} 
+                      color={existingPricing ? "#3b82f6" : "#10b981"} 
+                    />
                   </TouchableOpacity>
-                )}
+                  {existingPricing && (
+                    <TouchableOpacity
+                      onPress={() => handleDeletePricing(existingPricing.id, vehicle.name)}
+                      style={styles.deleteButton}
+                    >
+                      <Ionicons name="trash-outline" size={18} color="#ef4444" />
+                    </TouchableOpacity>
+                  )}
+                </View>
               </View>
             );
           })}
@@ -373,7 +373,7 @@ export default function ServicesScreen() {
         <View style={styles.infoNote}>
           <Ionicons name="information-circle" size={16} color="#6b7280" />
           <Text style={styles.infoNoteText}>
-            Specific vehicle prices override the base price. Leave empty to use base price.
+            Specific vehicle prices override the base price. Click + to add or edit pricing.
           </Text>
         </View>
       </View>
@@ -492,7 +492,84 @@ export default function ServicesScreen() {
         </View>
       </Modal>
 
-      {/* Modal: Add/Edit Vehicle Pricing */}
+      {/* Modal: Edit Base Price */}
+      <Modal
+        visible={showPriceEditModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => {
+          setShowPriceEditModal(false);
+          setEditingServicePrice(null);
+          setNewBasePrice('');
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Update Base Price</Text>
+              <TouchableOpacity onPress={() => {
+                setShowPriceEditModal(false);
+                setEditingServicePrice(null);
+                setNewBasePrice('');
+              }}>
+                <Ionicons name="close" size={24} color="#6b7280" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.modalForm}>
+              <Text style={styles.serviceNameText}>
+                {editingServicePrice?.name}
+              </Text>
+              
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>Current Price</Text>
+                <Text style={styles.currentPrice}>
+                  KES {parseFloat(editingServicePrice?.price || '0').toLocaleString()}
+                </Text>
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>New Price (KES) *</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Enter new price"
+                  value={newBasePrice}
+                  onChangeText={setNewBasePrice}
+                  keyboardType="numeric"
+                  autoFocus
+                />
+              </View>
+
+              <View style={styles.modalButtons}>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.cancelModalButton]}
+                  onPress={() => {
+                    setShowPriceEditModal(false);
+                    setEditingServicePrice(null);
+                    setNewBasePrice('');
+                  }}
+                >
+                  <Text style={styles.cancelModalButtonText}>Cancel</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.updateModalButton, (!newBasePrice || submitting) && styles.submitButtonDisabled]}
+                  onPress={handleUpdateBasePrice}
+                  disabled={!newBasePrice || submitting}
+                >
+                  {submitting ? (
+                    <ActivityIndicator color="#fff" size="small" />
+                  ) : (
+                    <Text style={styles.updateModalButtonText}>Update Price</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal: Add/Edit Vehicle Pricing - FIXED VERSION */}
       <Modal
         visible={showPricingModal}
         animationType="slide"
@@ -502,10 +579,12 @@ export default function ServicesScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>
-                {editingPricing ? 'Edit' : 'Add'} Vehicle Pricing
-              </Text>
-              <Text style={styles.modalSubtitle}>{selectedService?.name}</Text>
+              <View>
+                <Text style={styles.modalTitle}>
+                  {editingPricing ? 'Edit' : 'Add'} Vehicle Pricing
+                </Text>
+                <Text style={styles.modalSubtitle}>{selectedService?.name}</Text>
+              </View>
               <TouchableOpacity onPress={() => setShowPricingModal(false)}>
                 <Ionicons name="close" size={24} color="#6b7280" />
               </TouchableOpacity>
@@ -513,13 +592,19 @@ export default function ServicesScreen() {
 
             <ScrollView style={styles.modalForm}>
               <View style={styles.inputGroup}>
-                <Text style={styles.label}>Vehicle Type *</Text>
+                <Text style={styles.label}>Select Vehicle Type *</Text>
                 <View style={styles.vehicleGrid}>
                   {vehicles.map((vehicle) => {
-                    const isSelected = selectedVehicle === vehicle.id;
                     const existingPricing = pricing.find(
                       p => p.service === selectedService?.id && p.vehicle_type === vehicle.id
                     );
+                    const isSelected = selectedVehicle === vehicle.id;
+                    const isEditingCurrent = editingPricing?.id === existingPricing?.id;
+                    
+                    // Allow selection if:
+                    // 1. No pricing exists for this vehicle, OR
+                    // 2. We're editing the existing pricing for this vehicle
+                    const isSelectable = !existingPricing || isEditingCurrent;
                     
                     return (
                       <TouchableOpacity
@@ -527,31 +612,38 @@ export default function ServicesScreen() {
                         style={[
                           styles.vehicleOption,
                           isSelected && styles.vehicleOptionActive,
-                          existingPricing && existingPricing.id !== editingPricing?.id && styles.vehicleOptionDisabled
+                          !isSelectable && styles.vehicleOptionDisabled
                         ]}
                         onPress={() => {
-                          if (!existingPricing || existingPricing.id === editingPricing?.id) {
+                          if (isSelectable) {
                             setSelectedVehicle(vehicle.id);
                             if (!editingPricing && selectedService) {
-                              // Pre-fill with base price
+                              // Pre-fill with base price when adding new
                               setPriceAmount(selectedService.price);
                             }
                           } else {
-                            Alert.alert('Not Available', 'Pricing already exists for this vehicle. Edit existing entry instead.');
+                            Alert.alert(
+                              'Pricing Exists',
+                              `Pricing for ${vehicle.name} already exists. Click the edit button on the service card to modify it.`
+                            );
                           }
                         }}
-                        disabled={existingPricing && existingPricing.id !== editingPricing?.id}
                       >
                         <Text style={[
                           styles.vehicleOptionText,
                           isSelected && styles.vehicleOptionTextActive,
-                          existingPricing && existingPricing.id !== editingPricing?.id && styles.vehicleOptionTextDisabled
+                          !isSelectable && styles.vehicleOptionTextDisabled
                         ]}>
                           {vehicle.name}
                         </Text>
                         {existingPricing && (
                           <Text style={styles.existingPriceBadge}>
                             Current: KES {parseFloat(existingPricing.price).toLocaleString()}
+                          </Text>
+                        )}
+                        {isSelectable && !existingPricing && (
+                          <Text style={styles.newPriceBadge}>
+                            New pricing
                           </Text>
                         )}
                       </TouchableOpacity>
@@ -564,19 +656,29 @@ export default function ServicesScreen() {
                 <Text style={styles.label}>Price (KES) *</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="e.g., 500"
+                  placeholder="Enter price amount"
                   value={priceAmount}
                   onChangeText={setPriceAmount}
                   keyboardType="numeric"
                 />
-                {selectedService && selectedVehicle && (
-                  <Text style={styles.compareText}>
-                    Base price: KES {parseFloat(selectedService.price).toLocaleString()}
-                    {parseFloat(priceAmount) > parseFloat(selectedService.price) && 
-                      ` (+${(parseFloat(priceAmount) - parseFloat(selectedService.price)).toLocaleString()})`}
-                    {parseFloat(priceAmount) < parseFloat(selectedService.price) && 
-                      ` (${(parseFloat(priceAmount) - parseFloat(selectedService.price)).toLocaleString()})`}
-                  </Text>
+                {selectedService && selectedVehicle && priceAmount && (
+                  <View style={styles.priceComparison}>
+                    <Text style={styles.compareText}>
+                      Base price: KES {parseFloat(selectedService.price).toLocaleString()}
+                    </Text>
+                    {parseFloat(priceAmount) !== parseFloat(selectedService.price) && (
+                      <Text style={[
+                        styles.compareDiff,
+                        parseFloat(priceAmount) > parseFloat(selectedService.price) 
+                          ? styles.higherPrice 
+                          : styles.lowerPrice
+                      ]}>
+                        {parseFloat(priceAmount) > parseFloat(selectedService.price) 
+                          ? `+${(parseFloat(priceAmount) - parseFloat(selectedService.price)).toLocaleString()} higher`
+                          : `${(parseFloat(priceAmount) - parseFloat(selectedService.price)).toLocaleString()} lower`}
+                      </Text>
+                    )}
+                  </View>
                 )}
               </View>
 
@@ -589,19 +691,17 @@ export default function ServicesScreen() {
                   <ActivityIndicator color="#fff" />
                 ) : (
                   <Text style={styles.submitButtonText}>
-                    {editingPricing ? 'Update Pricing' : 'Save Pricing'}
+                    {editingPricing ? 'Update Pricing' : 'Add Pricing'}
                   </Text>
                 )}
               </TouchableOpacity>
 
-              {editingPricing && (
-                <TouchableOpacity
-                  style={styles.cancelButton}
-                  onPress={resetPricingForm}
-                >
-                  <Text style={styles.cancelButtonText}>Cancel</Text>
-                </TouchableOpacity>
-              )}
+              <TouchableOpacity
+                style={styles.cancelButton}
+                onPress={() => setShowPricingModal(false)}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
             </ScrollView>
           </View>
         </View>
@@ -722,6 +822,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#6b7280',
     textTransform: 'uppercase',
+    flex: 1,
   },
   pricingRow: {
     flexDirection: 'row',
@@ -734,13 +835,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
     color: '#374151',
-    flex: 2,
+    flex: 1,
   },
   priceValue: {
     fontSize: 14,
     fontWeight: '500',
     color: '#374151',
-    flex: 2,
+    flex: 1,
   },
   specificPrice: {
     color: '#3b82f6',
@@ -748,7 +849,7 @@ const styles = StyleSheet.create({
   },
   priceDifference: {
     fontSize: 12,
-    flex: 1.5,
+    flex: 1,
   },
   higherPrice: {
     color: '#ef4444',
@@ -759,13 +860,17 @@ const styles = StyleSheet.create({
   samePrice: {
     color: '#6b7280',
   },
+  rowActions: {
+    flexDirection: 'row',
+    width: 70,
+    justifyContent: 'flex-end',
+    gap: 12,
+  },
   actionButton: {
-    width: 40,
-    alignItems: 'center',
+    padding: 4,
   },
   deleteButton: {
-    width: 40,
-    alignItems: 'center',
+    padding: 4,
   },
   infoNote: {
     flexDirection: 'row',
@@ -812,6 +917,9 @@ const styles = StyleSheet.create({
     maxHeight: '80%',
   },
   modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
     padding: 20,
     borderBottomWidth: 1,
     borderBottomColor: '#e5e7eb',
@@ -852,10 +960,36 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     marginTop: 4,
   },
+  priceComparison: {
+    marginTop: 8,
+    padding: 8,
+    backgroundColor: '#f9fafb',
+    borderRadius: 8,
+  },
   compareText: {
     fontSize: 12,
     color: '#6b7280',
-    marginTop: 4,
+  },
+  compareDiff: {
+    fontSize: 12,
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  serviceNameText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1f2937',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  currentPrice: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#10b981',
+    backgroundColor: '#f0fdf4',
+    padding: 12,
+    borderRadius: 8,
+    textAlign: 'center',
   },
   vehicleGrid: {
     gap: 10,
@@ -889,6 +1023,11 @@ const styles = StyleSheet.create({
   existingPriceBadge: {
     fontSize: 11,
     color: '#10b981',
+    marginTop: 4,
+  },
+  newPriceBadge: {
+    fontSize: 11,
+    color: '#3b82f6',
     marginTop: 4,
   },
   infoBox: {
@@ -929,6 +1068,33 @@ const styles = StyleSheet.create({
   },
   cancelButtonText: {
     color: '#6b7280',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 20,
+  },
+  modalButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  cancelModalButton: {
+    backgroundColor: '#f3f4f6',
+  },
+  cancelModalButtonText: {
+    color: '#6b7280',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  updateModalButton: {
+    backgroundColor: '#3b82f6',
+  },
+  updateModalButtonText: {
+    color: '#fff',
     fontSize: 14,
     fontWeight: '500',
   },

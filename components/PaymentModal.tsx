@@ -9,9 +9,12 @@ import {
   TextInput,
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { paymentService } from '../services/payment';
+import { paymentService } from '../src/services/payment';
 
 interface PaymentModalProps {
   visible: boolean;
@@ -20,6 +23,8 @@ interface PaymentModalProps {
   jobId: number;
   amount: number;
   plateNumber: string;
+  serviceName: string;
+  vehicleName: string;
 }
 
 export const PaymentModal: React.FC<PaymentModalProps> = ({
@@ -29,32 +34,71 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   jobId,
   amount,
   plateNumber,
+  serviceName,
+  vehicleName,
 }) => {
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'mpesa' | null>(null);
-  const [phoneNumber, setPhoneNumber] = useState('');
+  const [step, setStep] = useState<'select' | 'manual' | 'stk'>('select');
   const [processing, setProcessing] = useState(false);
+  const [transactionId, setTransactionId] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
 
+  const resetModal = () => {
+    setStep('select');
+    setTransactionId('');
+    setPhoneNumber('');
+    setProcessing(false);
+  };
+
+  const handleClose = () => {
+    resetModal();
+    onClose();
+  };
+
+  // Cash Payment
   const handleCashPayment = async () => {
     setProcessing(true);
     try {
       await paymentService.processCashPayment(jobId);
-      Alert.alert('Success', 'Cash payment recorded successfully');
-      onSuccess();
-      onClose();
+      Alert.alert('Success', 'Cash payment recorded successfully!', [
+        { text: 'OK', onPress: onSuccess }
+      ]);
+      handleClose();
     } catch (error: any) {
-      Alert.alert('Error', error.response?.data?.error || 'Payment failed');
+      Alert.alert('Error', error.response?.data?.message || 'Payment failed');
     } finally {
       setProcessing(false);
     }
   };
 
-  const handleMpesaPayment = async () => {
+  // Manual M-Pesa Payment
+  const handleManualMpesa = async () => {
+    if (!transactionId.trim()) {
+      Alert.alert('Error', 'Please enter M-Pesa transaction ID');
+      return;
+    }
+
+    setProcessing(true);
+    try {
+      await paymentService.processManualMpesaPayment(jobId, transactionId);
+      Alert.alert('Success', 'M-Pesa payment recorded successfully!', [
+        { text: 'OK', onPress: onSuccess }
+      ]);
+      handleClose();
+    } catch (error: any) {
+      Alert.alert('Error', error.response?.data?.message || 'Payment failed');
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  // STK Push Payment
+  const handleSTKPush = async () => {
     if (!phoneNumber || phoneNumber.length < 10) {
       Alert.alert('Error', 'Please enter a valid phone number');
       return;
     }
 
-    // Format phone number (remove 0 or +254)
+    // Format phone number
     let formattedNumber = phoneNumber.replace(/\s/g, '');
     if (formattedNumber.startsWith('0')) {
       formattedNumber = '254' + formattedNumber.substring(1);
@@ -64,18 +108,19 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
 
     setProcessing(true);
     try {
-      const response = await paymentService.initiateMpesaPayment(jobId, formattedNumber);
+      await paymentService.initiateSTKPush(jobId, formattedNumber);
+      
       Alert.alert(
-        'STK Push Sent',
-        `Please check your phone ${phoneNumber} and enter your PIN to complete payment.`,
+        'STK Push Sent!',
+        `Check your phone ${phoneNumber} and enter your PIN to complete payment.`,
         [
-          {
-            text: 'OK',
+          { 
+            text: 'OK', 
             onPress: () => {
               // Start polling for payment status
               pollPaymentStatus();
-            },
-          },
+            }
+          }
         ]
       );
     } catch (error: any) {
@@ -86,17 +131,18 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
 
   const pollPaymentStatus = async () => {
     let attempts = 0;
-    const maxAttempts = 30; // 30 seconds timeout
+    const maxAttempts = 30; // 30 seconds
     
     const interval = setInterval(async () => {
       attempts++;
       try {
         const payment = await paymentService.getPaymentByJob(jobId);
-        if (payment && payment.status === 'completed') {
+        if (payment && payment.status === 'success') {
           clearInterval(interval);
-          Alert.alert('Success', 'Payment received successfully!');
-          onSuccess();
-          onClose();
+          Alert.alert('Success', 'Payment received successfully!', [
+            { text: 'OK', onPress: onSuccess }
+          ]);
+          handleClose();
         } else if (payment && payment.status === 'failed') {
           clearInterval(interval);
           Alert.alert('Error', 'Payment failed. Please try again.');
@@ -112,16 +158,167 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     }, 1000);
   };
 
-  const resetModal = () => {
-    setPaymentMethod(null);
-    setPhoneNumber('');
-    setProcessing(false);
-  };
+  const renderSelectMethod = () => (
+    <>
+      <View style={styles.jobSummary}>
+        <View style={styles.summaryRow}>
+          <Ionicons name="car" size={16} color="#6b7280" />
+          <Text style={styles.summaryText}>{plateNumber}</Text>
+        </View>
+        <View style={styles.summaryRow}>
+          <Ionicons name="construct" size={16} color="#6b7280" />
+          <Text style={styles.summaryText}>{serviceName}</Text>
+        </View>
+        <View style={styles.summaryRow}>
+          <Ionicons name="car-sport" size={16} color="#6b7280" />
+          <Text style={styles.summaryText}>{vehicleName}</Text>
+        </View>
+        <View style={[styles.summaryRow, styles.amountRow]}>
+          <Ionicons name="cash" size={16} color="#10b981" />
+          <Text style={styles.amountText}>KES {amount.toLocaleString()}</Text>
+        </View>
+      </View>
 
-  const handleClose = () => {
-    resetModal();
-    onClose();
-  };
+      <Text style={styles.sectionTitle}>Select Payment Method</Text>
+      
+      {/* Cash Button */}
+      <TouchableOpacity style={styles.methodCard} onPress={handleCashPayment}>
+        <View style={[styles.methodIcon, { backgroundColor: '#10b981' }]}>
+          <Ionicons name="wallet" size={28} color="#fff" />
+        </View>
+        <View style={styles.methodInfo}>
+          <Text style={styles.methodName}>Cash</Text>
+          <Text style={styles.methodDesc}>Pay with cash at counter</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={20} color="#cbd5e1" />
+      </TouchableOpacity>
+
+      {/* M-Pesa Manual Button */}
+      <TouchableOpacity 
+        style={styles.methodCard} 
+        onPress={() => setStep('manual')}
+      >
+        <View style={[styles.methodIcon, { backgroundColor: '#3b82f6' }]}>
+          <Ionicons name="create-outline" size={28} color="#fff" />
+        </View>
+        <View style={styles.methodInfo}>
+          <Text style={styles.methodName}>M-Pesa Manual</Text>
+          <Text style={styles.methodDesc}>Enter transaction ID manually</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={20} color="#cbd5e1" />
+      </TouchableOpacity>
+
+      {/* M-Pesa STK Push Button */}
+      <TouchableOpacity 
+        style={styles.methodCard} 
+        onPress={() => setStep('stk')}
+      >
+        <View style={[styles.methodIcon, { backgroundColor: '#8b5cf6' }]}>
+          <Ionicons name="phone-portrait" size={28} color="#fff" />
+        </View>
+        <View style={styles.methodInfo}>
+          <Text style={styles.methodName}>M-Pesa STK Push</Text>
+          <Text style={styles.methodDesc}>Customer receives prompt on phone</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={20} color="#cbd5e1" />
+      </TouchableOpacity>
+    </>
+  );
+
+  const renderManualMpesa = () => (
+    <>
+      <TouchableOpacity style={styles.backButton} onPress={() => setStep('select')}>
+        <Ionicons name="arrow-back" size={24} color="#3b82f6" />
+        <Text style={styles.backText}>Back</Text>
+      </TouchableOpacity>
+
+      <View style={styles.formCard}>
+        <Ionicons name="receipt-outline" size={48} color="#3b82f6" style={styles.formIcon} />
+        <Text style={styles.formTitle}>Enter M-Pesa Transaction ID</Text>
+        <Text style={styles.formSubtitle}>
+          Ask customer for the transaction ID from their M-Pesa message
+        </Text>
+
+        <View style={styles.inputContainer}>
+          <Ionicons name="document-text-outline" size={20} color="#9ca3af" />
+          <TextInput
+            style={styles.input}
+            placeholder="e.g., QWERTY123UI"
+            placeholderTextColor="#9ca3af"
+            value={transactionId}
+            onChangeText={setTransactionId}
+            autoCapitalize="characters"
+            autoCorrect={false}
+          />
+        </View>
+
+        <TouchableOpacity
+          style={[styles.confirmButton, !transactionId && styles.disabledButton]}
+          onPress={handleManualMpesa}
+          disabled={!transactionId || processing}
+        >
+          {processing ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <>
+              <Text style={styles.confirmButtonText}>Confirm Payment</Text>
+              <Ionicons name="checkmark-circle" size={20} color="#fff" />
+            </>
+          )}
+        </TouchableOpacity>
+      </View>
+    </>
+  );
+
+  const renderSTKPush = () => (
+    <>
+      <TouchableOpacity style={styles.backButton} onPress={() => setStep('select')}>
+        <Ionicons name="arrow-back" size={24} color="#3b82f6" />
+        <Text style={styles.backText}>Back</Text>
+      </TouchableOpacity>
+
+      <View style={styles.formCard}>
+        <Ionicons name="phone-portrait-outline" size={48} color="#8b5cf6" style={styles.formIcon} />
+        <Text style={styles.formTitle}>M-Pesa STK Push</Text>
+        <Text style={styles.formSubtitle}>
+          Customer will receive a prompt on their phone to complete payment
+        </Text>
+
+        <View style={styles.phoneContainer}>
+          <View style={styles.countryCode}>
+            <Text style={styles.countryCodeText}>+254</Text>
+          </View>
+          <TextInput
+            style={styles.phoneInput}
+            placeholder="712345678"
+            placeholderTextColor="#9ca3af"
+            value={phoneNumber}
+            onChangeText={setPhoneNumber}
+            keyboardType="phone-pad"
+          />
+        </View>
+
+        <TouchableOpacity
+          style={[styles.stkButton, !phoneNumber && styles.disabledButton]}
+          onPress={handleSTKPush}
+          disabled={!phoneNumber || processing}
+        >
+          {processing ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <>
+              <Ionicons name="send-outline" size={20} color="#fff" />
+              <Text style={styles.confirmButtonText}>Send STK Push</Text>
+            </>
+          )}
+        </TouchableOpacity>
+
+        <Text style={styles.stkHint}>
+          Customer must have sufficient balance and enter their PIN to complete payment
+        </Text>
+      </View>
+    </>
+  );
 
   return (
     <Modal
@@ -130,107 +327,28 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
       transparent={true}
       onRequestClose={handleClose}
     >
-      <View style={styles.modalOverlay}>
+      <KeyboardAvoidingView
+        style={styles.modalOverlay}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
         <View style={styles.modalContent}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>Process Payment</Text>
-            <TouchableOpacity onPress={handleClose}>
+            <TouchableOpacity onPress={handleClose} style={styles.closeButton}>
               <Ionicons name="close" size={24} color="#6b7280" />
             </TouchableOpacity>
           </View>
 
-          <View style={styles.jobInfo}>
-            <Text style={styles.jobInfoLabel}>Vehicle:</Text>
-            <Text style={styles.jobInfoValue}>{plateNumber}</Text>
-            <Text style={styles.jobInfoLabel}>Amount:</Text>
-            <Text style={styles.amountValue}>KES {amount.toLocaleString()}</Text>
-          </View>
-
-          {!paymentMethod ? (
-            <View style={styles.methodSelector}>
-              <Text style={styles.methodTitle}>Select Payment Method</Text>
-              
-              <TouchableOpacity
-                style={styles.methodButton}
-                onPress={() => setPaymentMethod('cash')}
-              >
-                <Ionicons name="wallet-outline" size={32} color="#10b981" />
-                <View style={styles.methodTextContainer}>
-                  <Text style={styles.methodName}>Cash</Text>
-                  <Text style={styles.methodDescription}>Pay with cash at counter</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.methodButton}
-                onPress={() => setPaymentMethod('mpesa')}
-              >
-                <Ionicons name="phone-portrait-outline" size={32} color="#3b82f6" />
-                <View style={styles.methodTextContainer}>
-                  <Text style={styles.methodName}>M-Pesa</Text>
-                  <Text style={styles.methodDescription}>Pay using STK Push</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
-              </TouchableOpacity>
-            </View>
-          ) : (
-            <View style={styles.paymentForm}>
-              {paymentMethod === 'mpesa' && (
-                <View style={styles.mpesaForm}>
-                  <Text style={styles.inputLabel}>Phone Number</Text>
-                  <View style={styles.phoneInputContainer}>
-                    <Text style={styles.countryCode}>+254</Text>
-                    <TextInput
-                      style={styles.phoneInput}
-                      placeholder="712345678"
-                      keyboardType="phone-pad"
-                      value={phoneNumber}
-                      onChangeText={setPhoneNumber}
-                      editable={!processing}
-                    />
-                  </View>
-                  <Text style={styles.inputHint}>
-                    Enter the M-Pesa registered phone number
-                  </Text>
-                </View>
-              )}
-
-              <View style={styles.actionButtons}>
-                <TouchableOpacity
-                  style={styles.cancelButton}
-                  onPress={() => setPaymentMethod(null)}
-                  disabled={processing}
-                >
-                  <Text style={styles.cancelButtonText}>Back</Text>
-                </TouchableOpacity>
-                
-                <TouchableOpacity
-                  style={[
-                    styles.confirmButton,
-                    paymentMethod === 'mpesa' && !phoneNumber && styles.disabledButton,
-                  ]}
-                  onPress={paymentMethod === 'cash' ? handleCashPayment : handleMpesaPayment}
-                  disabled={
-                    processing ||
-                    (paymentMethod === 'mpesa' && !phoneNumber)
-                  }
-                >
-                  {processing ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <>
-                      <Text style={styles.confirmButtonText}>
-                        {paymentMethod === 'cash' ? 'Confirm Cash Payment' : 'Send STK Push'}
-                      </Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-              </View>
-            </View>
-          )}
+          <ScrollView 
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.scrollContent}
+          >
+            {step === 'select' && renderSelectMethod()}
+            {step === 'manual' && renderManualMpesa()}
+            {step === 'stk' && renderSTKPush()}
+          </ScrollView>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 };
@@ -239,14 +357,13 @@ const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: 'flex-end',
   },
   modalContent: {
     backgroundColor: '#fff',
-    borderRadius: 20,
-    width: '90%',
-    maxHeight: '80%',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    maxHeight: '90%',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -254,57 +371,71 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 20,
     borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
+    borderBottomColor: '#f3f4f6',
   },
   modalTitle: {
     fontSize: 20,
-    fontWeight: '600',
+    fontWeight: '700',
     color: '#1f2937',
   },
-  jobInfo: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    padding: 16,
+  closeButton: {
+    padding: 4,
+  },
+  scrollContent: {
+    padding: 20,
+  },
+  jobSummary: {
     backgroundColor: '#f9fafb',
-    margin: 16,
     borderRadius: 12,
+    padding: 16,
+    marginBottom: 24,
     gap: 8,
   },
-  jobInfoLabel: {
-    fontSize: 14,
-    color: '#6b7280',
+  summaryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
-  jobInfoValue: {
+  summaryText: {
     fontSize: 14,
-    fontWeight: '500',
-    color: '#1f2937',
-    marginRight: 16,
+    color: '#4b5563',
   },
-  amountValue: {
+  amountRow: {
+    marginTop: 4,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+  },
+  amountText: {
     fontSize: 18,
     fontWeight: '700',
     color: '#10b981',
   },
-  methodSelector: {
-    padding: 20,
-  },
-  methodTitle: {
+  sectionTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#1f2937',
-    marginBottom: 16,
+    color: '#374151',
+    marginBottom: 12,
   },
-  methodButton: {
+  methodCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
-    backgroundColor: '#f9fafb',
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
     borderRadius: 12,
+    padding: 16,
     marginBottom: 12,
     gap: 12,
   },
-  methodTextContainer: {
+  methodIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  methodInfo: {
     flex: 1,
   },
   methodName: {
@@ -313,82 +444,118 @@ const styles = StyleSheet.create({
     color: '#1f2937',
     marginBottom: 2,
   },
-  methodDescription: {
+  methodDesc: {
     fontSize: 12,
     color: '#6b7280',
   },
-  paymentForm: {
-    padding: 20,
-  },
-  mpesaForm: {
+  backButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
     marginBottom: 20,
+    gap: 8,
   },
-  inputLabel: {
-    fontSize: 14,
+  backText: {
+    fontSize: 16,
+    color: '#3b82f6',
     fontWeight: '500',
-    color: '#374151',
+  },
+  formCard: {
+    alignItems: 'center',
+  },
+  formIcon: {
+    marginBottom: 16,
+  },
+  formTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1f2937',
     marginBottom: 8,
   },
-  phoneInputContainer: {
+  formSubtitle: {
+    fontSize: 14,
+    color: '#6b7280',
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#e5e7eb',
-    borderRadius: 8,
+    borderRadius: 12,
+    paddingHorizontal: 16,
     backgroundColor: '#fff',
+    marginBottom: 24,
+    height: 52,
+    gap: 12,
   },
-  countryCode: {
-    paddingHorizontal: 12,
+  input: {
+    flex: 1,
     fontSize: 16,
     color: '#1f2937',
+  },
+  phoneContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 12,
+    backgroundColor: '#fff',
+    marginBottom: 24,
+    height: 52,
+    overflow: 'hidden',
+  },
+  countryCode: {
+    backgroundColor: '#f3f4f6',
+    paddingHorizontal: 16,
+    height: '100%',
+    justifyContent: 'center',
     borderRightWidth: 1,
     borderRightColor: '#e5e7eb',
   },
+  countryCodeText: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#1f2937',
+  },
   phoneInput: {
     flex: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
+    paddingHorizontal: 16,
     fontSize: 16,
     color: '#1f2937',
   },
-  inputHint: {
-    fontSize: 12,
-    color: '#6b7280',
-    marginTop: 4,
-  },
-  actionButtons: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 20,
-  },
-  cancelButton: {
-    flex: 1,
-    paddingVertical: 12,
-    backgroundColor: '#f3f4f6',
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  cancelButtonText: {
-    color: '#6b7280',
-    fontSize: 14,
-    fontWeight: '500',
-  },
   confirmButton: {
-    flex: 2,
     flexDirection: 'row',
     backgroundColor: '#10b981',
-    paddingVertical: 12,
-    borderRadius: 8,
+    borderRadius: 12,
+    paddingVertical: 14,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
+    width: '100%',
+  },
+  stkButton: {
+    flexDirection: 'row',
+    backgroundColor: '#8b5cf6',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    width: '100%',
   },
   confirmButtonText: {
     color: '#fff',
-    fontSize: 14,
+    fontSize: 16,
     fontWeight: '600',
   },
   disabledButton: {
-    backgroundColor: '#9ca3af',
+    opacity: 0.5,
+  },
+  stkHint: {
+    fontSize: 12,
+    color: '#9ca3af',
+    textAlign: 'center',
+    marginTop: 16,
   },
 });

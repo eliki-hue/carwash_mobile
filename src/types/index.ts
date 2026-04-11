@@ -45,21 +45,20 @@ export interface Job {
 export interface Payment {
   id: number;
   job: number;
-  method: 'cash' | 'mpesa';
+  method: 'cash' | 'mpesa_manual' | 'mpesa_stk';
   amount: number;
   transaction_id?: string;
-  status: 'pending' | 'completed' | 'failed';
+  phone_number?: string;
+  checkout_request_id?: string;
+  status: 'pending' | 'success' | 'failed';
   created_at: string;
+  service_name?: string;
+  vehicle_type?: string;
+  plate_number?: string;
 }
 
 export interface DailyReport {
   total_revenue: number;
   cars_washed: number;
   date: string;
-}
-
-export interface MpesaSTKPushRequest {
-  phone_number: string;
-  amount: number;
-  job_id: number;
 }
