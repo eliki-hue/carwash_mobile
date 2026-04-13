@@ -13,7 +13,7 @@ export default function Manage() {
       description: 'Manage vehicle categories (Sedan, SUV, Truck, etc.)',
       icon: 'car',
       color: '#3b82f6',
-      route: '/(tabs)/vehicle-types'
+      route: '/vehicle-types'
     },
     {
       id: 'services',
@@ -21,7 +21,7 @@ export default function Manage() {
       description: 'Configure services and vehicle-specific pricing',
       icon: 'construct',
       color: '#10b981',
-      route: '/(tabs)/services'
+      route: '/services'
     },
     {
       id: 'users',
@@ -29,7 +29,7 @@ export default function Manage() {
       description: 'Add, edit, or remove staff accounts',
       icon: 'people',
       color: '#f59e0b',
-      route: '/(tabs)/users'
+      route: '/users'
     },
   ];
 
