@@ -1,4 +1,4 @@
-// app/(tabs)/jobs.tsx
+// app/(tabs)/jobs.tsx - Add logout button
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
@@ -8,8 +8,10 @@ import {
   RefreshControl,
   TouchableOpacity,
   Alert,
+  Modal,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useAuth } from '../../src/hooks/useAuth';
 import { Ionicons } from '@expo/vector-icons';
@@ -51,6 +53,7 @@ export default function JobsScreen() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [jobCounts, setJobCounts] = useState({
     pending: 0,
     in_progress: 0,
@@ -58,9 +61,10 @@ export default function JobsScreen() {
     paid: 0
   });
   
-  const { role } = useAuth();
+  const { role, logout } = useAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  
   useEffect(() => {
     loadInitialData();
   }, []);
@@ -86,7 +90,8 @@ export default function JobsScreen() {
   useFocusEffect(
     useCallback(() => {
       fetchAllJobCounts(); // 🔥 your existing function
-    }, [])
+      fetchJobs(activeTab); // Also refresh jobs when coming back
+    }, [activeTab])
   );
 
   const fetchAllJobCounts = async () => {
@@ -161,6 +166,26 @@ export default function JobsScreen() {
     }
   };
 
+  const handleLogout = async () => {
+    setShowLogoutModal(false);
+      try {
+      await api.post('/users/logout/');
+    } catch (e) {
+      // even if backend fails, we still logout locally
+    }
+
+    await AsyncStorage.removeItem('token');
+    router.replace('/(auth)/login');
+    // try {
+    //   await logout();
+    //   // Navigate to login screen
+    //   router.replace('/login');
+    // } catch (error) {
+    //   console.error('Logout error:', error);
+    //   Alert.alert('Error', 'Failed to logout. Please try again.');
+    // }
+  };
+
   const getServiceName = (serviceId: number) => {
     const service = services.find(s => s.id === serviceId);
     return service?.name || 'Loading...';
@@ -227,9 +252,45 @@ export default function JobsScreen() {
     return date.toLocaleDateString();
   };
 
-  // const handleCreateJob = () => {
-  //   router.push('/create-job');
-  // };
+  const handleCreateJob = () => {
+    router.push('/create-job');
+  };
+
+  const LogoutModal = () => (
+    <Modal
+      visible={showLogoutModal}
+      animationType="fade"
+      transparent={true}
+      onRequestClose={() => setShowLogoutModal(false)}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.logoutModalContent}>
+          <View style={styles.logoutIconContainer}>
+            <Ionicons name="log-out-outline" size={48} color="#ef4444" />
+          </View>
+          <Text style={styles.logoutTitle}>Logout</Text>
+          <Text style={styles.logoutMessage}>
+            Are you sure you want to logout? You will need to login again to access your account.
+          </Text>
+          <View style={styles.logoutButtons}>
+            <TouchableOpacity 
+              style={[styles.logoutButton, styles.cancelButton]}
+              onPress={() => setShowLogoutModal(false)}
+            >
+              <Text style={styles.cancelButtonText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={[styles.logoutButton, styles.confirmButton]}
+              onPress={handleLogout}
+            >
+              <Ionicons name="log-out-outline" size={18} color="#fff" />
+              <Text style={styles.confirmButtonText}>Logout</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
 
   const renderJobCard = ({ item }: { item: Job }) => {
     const showActionButton = item.status !== 'completed' && item.status !== 'paid';
@@ -333,15 +394,24 @@ export default function JobsScreen() {
     <View style={styles.container}>
       <View style={[styles.header, {paddingTop: insets.top + 8}]}>
         <Text style={styles.title}>Jobs</Text>
-        {/* {role === 'owner' && (
+        <View style={styles.headerButtons}>
+          {role === 'owner' && (
+            <TouchableOpacity 
+              style={styles.iconButton} 
+              onPress={handleCreateJob}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="add-circle" size={32} color="#3b82f6" />
+            </TouchableOpacity>
+          )}
           <TouchableOpacity 
-            style={styles.createButton} 
-            onPress={handleCreateJob}
+            style={styles.iconButton} 
+            onPress={() => setShowLogoutModal(true)}
             activeOpacity={0.7}
           >
-            <Ionicons name="add-circle" size={32} color="#3b82f6" />
+            <Ionicons name="log-out-outline" size={26} color="#ef4444" />
           </TouchableOpacity>
-        )} */}
+        </View>
       </View>
 
       <View style={styles.tabsContainer}>
@@ -387,6 +457,8 @@ export default function JobsScreen() {
           />
         }
       />
+      
+      <LogoutModal />
     </View>
   );
 }
@@ -412,7 +484,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#1f2937',
   },
-  createButton: {
+  headerButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  iconButton: {
     padding: 4,
   },
   tabsContainer: {
@@ -576,5 +653,73 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
     fontWeight: '600',
+  },
+  // Logout Modal Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  logoutModalContent: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 24,
+    width: '85%',
+    alignItems: 'center',
+  },
+  logoutIconContainer: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#fee2e2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  logoutTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#1f2937',
+    marginBottom: 8,
+  },
+  logoutMessage: {
+    fontSize: 14,
+    color: '#6b7280',
+    textAlign: 'center',
+    marginBottom: 24,
+    lineHeight: 20,
+  },
+  logoutButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+  },
+  logoutButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 10,
+    gap: 8,
+  },
+  cancelButton: {
+    backgroundColor: '#f3f4f6',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  cancelButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6b7280',
+  },
+  confirmButton: {
+    backgroundColor: '#ef4444',
+  },
+  confirmButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#fff',
   },
 });
