@@ -1,4 +1,4 @@
-// app/create-job.tsx - Updated with better error handling
+// app/create-job.tsx
 import React, { useState, useEffect } from 'react';
 import {
   View,
@@ -16,6 +16,7 @@ import {
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import api from '../../src/services/api';
+import { useAuth } from '../../src/hooks/useAuth';
 
 interface Service {
   id: number;
@@ -29,20 +30,33 @@ interface Vehicle {
   name: string;
 }
 
+interface Staff {
+  id: number;
+  username: string;
+  email: string;
+  role: string;
+}
+
 export default function CreateJob() {
   const [plateNumber, setPlateNumber] = useState('');
   const [selectedService, setSelectedService] = useState<Service | null>(null);
   const [selectedVehicle, setSelectedVehicle] = useState<Vehicle | null>(null);
+  const [selectedStaff, setSelectedStaff] = useState<Staff | null>(null);
   const [services, setServices] = useState<Service[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [staffList, setStaffList] = useState<Staff[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [showServiceModal, setShowServiceModal] = useState(false);
   const [showVehicleModal, setShowVehicleModal] = useState(false);
+  const [showStaffModal, setShowStaffModal] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [createdJob, setCreatedJob] = useState<any>(null);
 
   const router = useRouter();
+  const { role } = useAuth();
+  const isOwner = role === 'owner';
+  const isStaff = role === 'staff';
 
   useEffect(() => {
     loadData();
@@ -50,13 +64,22 @@ export default function CreateJob() {
 
   const loadData = async () => {
     try {
-      const [servicesRes, vehiclesRes] = await Promise.all([
+      const promises: any[] = [
         api.get('/services/'),
         api.get('/vehicles/'),
-      ]);
+      ];
       
-      setServices(servicesRes.data);
-      setVehicles(vehiclesRes.data);
+      promises.push(api.get('/auth/users/?role=staff'));
+      
+      const results = await Promise.all(promises);
+      setServices(results[0].data);
+      setVehicles(results[1].data);
+      
+      if (results[2]) {
+        setStaffList(results[2].data);
+      }
+      
+      // console.log('Data loaded successfully');
     } catch (error) {
       console.error('Error loading data:', error);
       Alert.alert('Error', 'Failed to load services and vehicles');
@@ -69,6 +92,7 @@ export default function CreateJob() {
     setPlateNumber('');
     setSelectedService(null);
     setSelectedVehicle(null);
+    setSelectedStaff(null);
   };
 
   const handleCreateJob = async () => {
@@ -88,49 +112,34 @@ export default function CreateJob() {
 
     setSubmitting(true);
     
-    // Prepare the request data
-    const requestData = {
+    const requestData: any = {
       plate_number: plateNumber.toUpperCase(),
       service: selectedService.id,
       vehicle_type: selectedVehicle.id,
       status: 'pending',
     };
     
+    // Add assigned staff if selected
+    if (selectedStaff) {
+      requestData.assigned_staff = selectedStaff.id;
+    }
+    
     console.log('Sending request data:', requestData);
     
     try {
       const response = await api.post('/jobs/', requestData);
-      
       console.log('Response:', response.data);
       
       setCreatedJob(response.data);
       setShowSuccessModal(true);
-      resetForm(); // Clear the form
+      resetForm();
       
     } catch (error: any) {
-      // console.error('Error creating job:', error);
-      
-      // Detailed error logging
-      if (error.response) {
-        // The request was made and the server responded with a status code
-        // that falls out of the range of 2xx
-        // console.error('Response data:', error.response.data);
-        // console.error('Response status:', error.response.status);
-        // console.error('Response headers:', error.response.headers);
-        
-        // Show specific error message from API
-        const errorMessage = error.response.data?.message || 
-                            error.response.data?.error || 
-                            JSON.stringify(error.response.data);
-        Alert.alert('Error', `Failed to create job: ${errorMessage}`);
-      } else if (error.request) {
-        // The request was made but no response was received
-        // console.error('No response received:', error.request);
-        Alert.alert('Error', 'No response from server. Please check your connection.');
+      console.error('Error creating job:', error);
+      if (error.response?.data) {
+        Alert.alert('Error', error.response.data.message || 'Failed to create job');
       } else {
-        // Something happened in setting up the request that triggered an Error
-        // console.error('Error message:', error.message);
-        Alert.alert('Error', `Failed to create job: ${error.message}`);
+        Alert.alert('Error', 'Failed to create job. Please try again.');
       }
     } finally {
       setSubmitting(false);
@@ -144,62 +153,7 @@ export default function CreateJob() {
 
   const handleCreateAnother = () => {
     setShowSuccessModal(false);
-    // Form is already cleared by resetForm()
   };
-
-  const SuccessModal = () => (
-    <Modal
-      visible={showSuccessModal}
-      animationType="fade"
-      transparent={true}
-      onRequestClose={() => setShowSuccessModal(false)}
-    >
-      <View style={styles.successModalOverlay}>
-        <View style={styles.successModalContent}>
-          <View style={styles.successIconContainer}>
-            <Ionicons name="checkmark-circle" size={64} color="#10b981" />
-          </View>
-          <Text style={styles.successTitle}>Job Created Successfully!</Text>
-          <Text style={styles.successMessage}>
-            Job has been added to the pending list
-          </Text>
-          
-          {createdJob && (
-            <View style={styles.successDetails}>
-              <View style={styles.successDetailRow}>
-                <Text style={styles.successDetailLabel}>Plate Number:</Text>
-                <Text style={styles.successDetailValue}>{createdJob.plate_number}</Text>
-              </View>
-              <View style={styles.successDetailRow}>
-                <Text style={styles.successDetailLabel}>Service:</Text>
-                <Text style={styles.successDetailValue}>
-                  {services.find(s => s.id === createdJob.service)?.name || 'Selected Service'}
-                </Text>
-              </View>
-            </View>
-          )}
-          
-          <View style={styles.successButtons}>
-            <TouchableOpacity 
-              style={[styles.successButton, styles.createAnotherButton]}
-              onPress={handleCreateAnother}
-            >
-              <Ionicons name="add-circle-outline" size={20} color="#3b82f6" />
-              <Text style={styles.createAnotherButtonText}>Create Another</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={[styles.successButton, styles.viewJobsButton]}
-              onPress={handleViewJobs}
-            >
-              <Ionicons name="eye-outline" size={20} color="#fff" />
-              <Text style={styles.viewJobsButtonText}>View Jobs</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </Modal>
-  );
 
   const ServiceModal = () => (
     <Modal
@@ -286,6 +240,128 @@ export default function CreateJob() {
               </TouchableOpacity>
             ))}
           </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+
+  const StaffModal = () => (
+    <Modal
+      visible={showStaffModal}
+      animationType="slide"
+      transparent={true}
+      onRequestClose={() => setShowStaffModal(false)}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Assign Staff</Text>
+            <TouchableOpacity onPress={() => setShowStaffModal(false)}>
+              <Ionicons name="close" size={24} color="#1f2937" />
+            </TouchableOpacity>
+          </View>
+          
+          <ScrollView style={styles.modalList}>
+            <TouchableOpacity
+              style={[
+                styles.modalItem,
+                !selectedStaff && styles.modalItemActive
+              ]}
+              onPress={() => {
+                setSelectedStaff(null);
+                setShowStaffModal(false);
+              }}
+            >
+              <Text style={styles.modalItemTitle}>Unassigned</Text>
+              {!selectedStaff && (
+                <Ionicons name="checkmark-circle" size={24} color="#3b82f6" />
+              )}
+            </TouchableOpacity>
+            
+            {staffList.map((staff) => (
+              <TouchableOpacity
+                key={staff.id}
+                style={[
+                  styles.modalItem,
+                  selectedStaff?.id === staff.id && styles.modalItemActive
+                ]}
+                onPress={() => {
+                  setSelectedStaff(staff);
+                  setShowStaffModal(false);
+                }}
+              >
+                <View style={styles.modalItemInfo}>
+                  <Text style={styles.modalItemTitle}>{staff.username}</Text>
+                  <Text style={styles.modalItemSubtitle}>{staff.email}</Text>
+                </View>
+                {selectedStaff?.id === staff.id && (
+                  <Ionicons name="checkmark-circle" size={24} color="#3b82f6" />
+                )}
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+
+  const SuccessModal = () => (
+    <Modal
+      visible={showSuccessModal}
+      animationType="fade"
+      transparent={true}
+      onRequestClose={() => setShowSuccessModal(false)}
+    >
+      <View style={styles.successModalOverlay}>
+        <View style={styles.successModalContent}>
+          <View style={styles.successIconContainer}>
+            <Ionicons name="checkmark-circle" size={64} color="#10b981" />
+          </View>
+          <Text style={styles.successTitle}>Job Created Successfully!</Text>
+          <Text style={styles.successMessage}>
+            Job has been added to the pending list
+          </Text>
+          
+          {createdJob && (
+            <View style={styles.successDetails}>
+              <View style={styles.successDetailRow}>
+                <Text style={styles.successDetailLabel}>Plate Number:</Text>
+                <Text style={styles.successDetailValue}>{createdJob.plate_number}</Text>
+              </View>
+              <View style={styles.successDetailRow}>
+                <Text style={styles.successDetailLabel}>Service:</Text>
+                <Text style={styles.successDetailValue}>
+                  {services.find(s => s.id === createdJob.service)?.name || 'Selected Service'}
+                </Text>
+              </View>
+              {createdJob.assigned_staff && (
+                <View style={styles.successDetailRow}>
+                  <Text style={styles.successDetailLabel}>Assigned To:</Text>
+                  <Text style={styles.successDetailValue}>
+                    {staffList.find(s => s.id === createdJob.assigned_staff)?.username || 'Staff Member'}
+                  </Text>
+                </View>
+              )}
+            </View>
+          )}
+          
+          <View style={styles.successButtons}>
+            <TouchableOpacity 
+              style={[styles.successButton, styles.createAnotherButton]}
+              onPress={handleCreateAnother}
+            >
+              <Ionicons name="add-circle-outline" size={20} color="#3b82f6" />
+              <Text style={styles.createAnotherButtonText}>Create Another</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={[styles.successButton, styles.viewJobsButton]}
+              onPress={handleViewJobs}
+            >
+              <Ionicons name="eye-outline" size={20} color="#fff" />
+              <Text style={styles.viewJobsButtonText}>View Jobs</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
     </Modal>
@@ -395,6 +471,30 @@ export default function CreateJob() {
             </TouchableOpacity>
           </View>
 
+          {/* Staff Assignment */}
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Assign Staff (Optional)</Text>
+            <TouchableOpacity 
+              style={styles.selectorCard}
+              onPress={() => setShowStaffModal(true)}
+            >
+              {selectedStaff ? (
+                <View style={styles.selectedItem}>
+                  <View>
+                    <Text style={styles.selectedItemTitle}>{selectedStaff.username}</Text>
+                    <Text style={styles.selectedItemSubtitle}>{selectedStaff.email}</Text>
+                  </View>
+                </View>
+              ) : (
+                <View style={styles.placeholderContent}>
+                  <Ionicons name="people-outline" size={32} color="#9ca3af" />
+                  <Text style={styles.placeholderText}>Tap to assign staff (optional)</Text>
+                </View>
+              )}
+              <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
+            </TouchableOpacity>
+          </View>
+
           {/* Summary */}
           {selectedService && selectedVehicle && plateNumber && (
             <View style={styles.summaryCard}>
@@ -411,6 +511,12 @@ export default function CreateJob() {
                 <Text style={styles.summaryLabel}>Vehicle:</Text>
                 <Text style={styles.summaryValue}>{selectedVehicle.name}</Text>
               </View>
+              {selectedStaff && (
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>Assigned To:</Text>
+                  <Text style={styles.summaryValue}>{selectedStaff.username}</Text>
+                </View>
+              )}
               <View style={styles.summaryRow}>
                 <Text style={styles.summaryLabel}>Total Amount:</Text>
                 <Text style={styles.summaryPrice}>
@@ -443,6 +549,7 @@ export default function CreateJob() {
 
       <ServiceModal />
       <VehicleModal />
+      <StaffModal />
       <SuccessModal />
     </KeyboardAvoidingView>
   );
@@ -677,7 +784,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#fff',
   },
-  // Success Modal Styles
   successModalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
