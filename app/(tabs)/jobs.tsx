@@ -1,4 +1,4 @@
-// app/(tabs)/jobs.tsx - Add logout button
+// app/(tabs)/jobs.tsx
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
@@ -11,7 +11,6 @@ import {
   Modal,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useAuth } from '../../src/hooks/useAuth';
 import { Ionicons } from '@expo/vector-icons';
@@ -54,146 +53,192 @@ export default function JobsScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [selectedJob, setSelectedJob] = useState<Job | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState('cash');
   const [jobCounts, setJobCounts] = useState({
     pending: 0,
     in_progress: 0,
     completed: 0,
     paid: 0
   });
+  const [error, setError] = useState<string | null>(null);
   
-  const { role, logout } = useAuth();
+  const { role, userId, loading: authLoading, logout } = useAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   
+  const isOwner = role === 'owner';
+  const isStaff = role === 'staff';
+  
+  // Wait for auth to load before fetching data
   useEffect(() => {
-    loadInitialData();
-  }, []);
+    if (!authLoading && role) {
+      console.log('Auth loaded - Role:', role, 'UserId:', userId);
+      loadInitialData();
+    }
+  }, [authLoading, role]);
+  
+  // Refresh when screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      if (!authLoading && role) {
+        refreshAllData();
+      }
+    }, [activeTab, authLoading, role])
+  );
+
+  const refreshAllData = async () => {
+    await Promise.all([
+      fetchAllJobCounts(),
+      fetchJobs(activeTab)
+    ]);
+  };
 
   const loadInitialData = async () => {
     try {
-      const [servicesRes, vehiclesRes] = await Promise.all([
-        api.get('/services/'),
-        api.get('/vehicles/'),
-      ]);
-      setServices(servicesRes.data);
-      setVehicles(vehiclesRes.data);
-      await fetchAllJobCounts();
-      await fetchJobs('pending');
-    } catch (error) {
+      setError(null);
+      setLoading(true);
+      
+      console.log('Loading initial data for role:', role);
+      
+      // Try to fetch services and vehicles
+      try {
+        const [servicesRes, vehiclesRes] = await Promise.all([
+          api.get('/services/'),
+          api.get('/vehicles/'),
+        ]);
+        setServices(servicesRes.data);
+        setVehicles(vehiclesRes.data);
+        console.log('Services and vehicles loaded successfully');
+      } catch (error: any) {
+        console.log('Error fetching services/vehicles:', error.response?.status);
+      }
+      
+      await refreshAllData();
+    } catch (error: any) {
       console.error('Error loading initial data:', error);
-      Alert.alert('Error', 'Failed to load data');
+      setError('Failed to load data. Please check your connection.');
     } finally {
       setLoading(false);
     }
   };
-
-  useFocusEffect(
-    useCallback(() => {
-      fetchAllJobCounts(); // 🔥 your existing function
-      fetchJobs(activeTab); // Also refresh jobs when coming back
-    }, [activeTab])
-  );
 
   const fetchAllJobCounts = async () => {
     try {
       const statuses: JobStatus[] = ['pending', 'in_progress', 'completed', 'paid'];
       const counts = { pending: 0, in_progress: 0, completed: 0, paid: 0 };
       
-      await Promise.all(
-        statuses.map(async (status) => {
-          try {
-            const response = await api.get(`/jobs/?status=${status}`);
-            const jobsData = Array.isArray(response.data) ? response.data : 
-                            (response.data.results || []);
-            counts[status] = jobsData.length;
-          } catch (error) {
-            console.error(`Error fetching ${status} count:`, error);
-          }
-        })
-      );
+      for (const status of statuses) {
+        try {
+          console.log(`Fetching ${status} jobs count...`);
+          const response = await api.get(`/jobs/?status=${status}`);
+          const jobsData = Array.isArray(response.data) ? response.data : 
+                          (response.data.results || []);
+          counts[status] = jobsData.length;
+          console.log(`${status} jobs count:`, jobsData.length);
+        } catch (error: any) {
+          console.error(`Error fetching ${status} count:`, error.response?.status);
+        }
+      }
       
       setJobCounts(counts);
     } catch (error) {
-      // console.error('Error fetching job counts:', error);
+      console.error('Error fetching job counts:', error);
     }
   };
 
   const fetchJobs = async (status: string) => {
     try {
+      setError(null);
+      console.log(`Fetching jobs with status: ${status}`);
+      console.log(`User role: ${role}, User ID: ${userId}`);
+      
       const response = await api.get(`/jobs/?status=${status}`);
+      console.log('API Response status:', response.status);
+      
       const jobsData = Array.isArray(response.data) ? response.data : 
                       (response.data.results || []);
+      
+      console.log(`Found ${jobsData.length} jobs`);
       setJobs(jobsData);
-    } catch (error) {
-      // console.error('Error fetching jobs:', error);
-      Alert.alert('Error', 'Failed to load jobs');
+      
+      if (jobsData.length === 0) {
+        console.log('No jobs found for status:', status);
+      }
+    } catch (error: any) {
+      console.error('Error fetching jobs:', error.response?.status, error.response?.data);
+      setError('Failed to load jobs. Please try again.');
       setJobs([]);
     }
   };
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([
-      fetchAllJobCounts(),
-      fetchJobs(activeTab)
-    ]);
+    setError(null);
+    await refreshAllData();
     setRefreshing(false);
   };
 
   const startJob = async (jobId: number) => {
     try {
+      console.log(`Starting job ${jobId}`);
       await api.post(`/jobs/${jobId}/start/`);
-      await Promise.all([
-        fetchAllJobCounts(),
-        fetchJobs(activeTab)
-      ]);
+      await refreshAllData();
       Alert.alert('Success', 'Job started successfully');
-    } catch (error) {
-      Alert.alert('Error', 'Failed to start job');
+    } catch (error: any) {
+      console.error('Start job error:', error.response?.data);
+      Alert.alert('Error', error.response?.data?.message || 'Failed to start job');
     }
   };
 
   const completeJob = async (jobId: number) => {
     try {
+      console.log(`Completing job ${jobId}`);
       await api.patch(`/jobs/${jobId}/complete/`);
-      await Promise.all([
-        fetchAllJobCounts(),
-        fetchJobs(activeTab)
-      ]);
+      await refreshAllData();
       Alert.alert('Success', 'Job completed successfully');
-    } catch (error) {
-      Alert.alert('Error', 'Failed to complete job');
+    } catch (error: any) {
+      console.error('Complete job error:', error.response?.data);
+      Alert.alert('Error', error.response?.data?.message || 'Failed to complete job');
+    }
+  };
+
+  const processPayment = async () => {
+    if (!selectedJob) return;
+    
+    try {
+      console.log(`Processing payment for job ${selectedJob.id}`);
+      await api.patch(`/jobs/${selectedJob.id}/pay/`, {
+        payment_method: paymentMethod,
+        amount: selectedJob.price,
+        processed_by: userId,
+      });
+      
+      await refreshAllData();
+      
+      setShowPaymentModal(false);
+      setSelectedJob(null);
+      Alert.alert('Success', 'Payment processed successfully');
+    } catch (error: any) {
+      console.error('Payment error:', error.response?.data);
+      Alert.alert('Error', error.response?.data?.message || 'Failed to process payment');
     }
   };
 
   const handleLogout = async () => {
     setShowLogoutModal(false);
-      try {
-      await api.post('/users/logout/');
-    } catch (e) {
-      // even if backend fails, we still logout locally
-    }
-
-    await AsyncStorage.removeItem('token');
-    router.replace('/(auth)/login');
-    // try {
-    //   await logout();
-    //   // Navigate to login screen
-    //   router.replace('/login');
-    // } catch (error) {
-    //   console.error('Logout error:', error);
-    //   Alert.alert('Error', 'Failed to logout. Please try again.');
-    // }
+    await logout();
   };
 
   const getServiceName = (serviceId: number) => {
     const service = services.find(s => s.id === serviceId);
-    return service?.name || 'Loading...';
+    return service?.name || `Service #${serviceId}`;
   };
 
   const getVehicleName = (vehicleId: number) => {
     const vehicle = vehicles.find(v => v.id === vehicleId);
-    return vehicle?.name || 'Loading...';
+    return vehicle?.name || `Vehicle #${vehicleId}`;
   };
 
   const getStatusColor = (status: string) => {
@@ -256,6 +301,23 @@ export default function JobsScreen() {
     router.push('/create-job');
   };
 
+  const openPaymentModal = (job: Job) => {
+    setSelectedJob(job);
+    setShowPaymentModal(true);
+  };
+
+  const tabs = [
+    { key: 'pending', label: 'Pending', icon: 'time-outline' },
+    { key: 'in_progress', label: 'In Progress', icon: 'play-circle-outline' },
+    { key: 'completed', label: 'Completed', icon: 'checkmark-circle-outline' },
+    { key: 'paid', label: 'Paid', icon: 'cash-outline' },
+  ];
+
+  const handleTabChange = async (tabKey: JobStatus) => {
+    setActiveTab(tabKey);
+    await fetchJobs(tabKey);
+  };
+
   const LogoutModal = () => (
     <Modal
       visible={showLogoutModal}
@@ -270,7 +332,7 @@ export default function JobsScreen() {
           </View>
           <Text style={styles.logoutTitle}>Logout</Text>
           <Text style={styles.logoutMessage}>
-            Are you sure you want to logout? You will need to login again to access your account.
+            Are you sure you want to logout?
           </Text>
           <View style={styles.logoutButtons}>
             <TouchableOpacity 
@@ -292,10 +354,120 @@ export default function JobsScreen() {
     </Modal>
   );
 
+  const PaymentModal = () => (
+    <Modal
+      visible={showPaymentModal}
+      animationType="slide"
+      transparent={true}
+      onRequestClose={() => setShowPaymentModal(false)}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.paymentModalContent}>
+          <View style={styles.paymentModalHeader}>
+            <Text style={styles.paymentModalTitle}>Process Payment</Text>
+            <TouchableOpacity onPress={() => setShowPaymentModal(false)}>
+              <Ionicons name="close" size={24} color="#6b7280" />
+            </TouchableOpacity>
+          </View>
+          
+          {selectedJob && (
+            <View style={styles.paymentDetails}>
+              <View style={styles.paymentDetailRow}>
+                <Text style={styles.paymentDetailLabel}>Plate Number:</Text>
+                <Text style={styles.paymentDetailValue}>{selectedJob.plate_number}</Text>
+              </View>
+              <View style={styles.paymentDetailRow}>
+                <Text style={styles.paymentDetailLabel}>Service:</Text>
+                <Text style={styles.paymentDetailValue}>
+                  {getServiceName(selectedJob.service)}
+                </Text>
+              </View>
+              <View style={styles.paymentDetailRow}>
+                <Text style={styles.paymentDetailLabel}>Amount:</Text>
+                <Text style={styles.paymentAmount}>
+                  KES {parseFloat(selectedJob.price).toLocaleString()}
+                </Text>
+              </View>
+              
+              <View style={styles.paymentMethodSection}>
+                <Text style={styles.paymentMethodLabel}>Payment Method</Text>
+                <View style={styles.paymentMethods}>
+                  <TouchableOpacity
+                    style={[
+                      styles.paymentMethodOption,
+                      paymentMethod === 'cash' && styles.paymentMethodActive
+                    ]}
+                    onPress={() => setPaymentMethod('cash')}
+                  >
+                    <Ionicons 
+                      name="cash-outline" 
+                      size={24} 
+                      color={paymentMethod === 'cash' ? '#3b82f6' : '#6b7280'} 
+                    />
+                    <Text style={[
+                      styles.paymentMethodText,
+                      paymentMethod === 'cash' && styles.paymentMethodTextActive
+                    ]}>Cash</Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity
+                    style={[
+                      styles.paymentMethodOption,
+                      paymentMethod === 'mpesa' && styles.paymentMethodActive
+                    ]}
+                    onPress={() => setPaymentMethod('mpesa')}
+                  >
+                    <Ionicons 
+                      name="phone-portrait-outline" 
+                      size={24} 
+                      color={paymentMethod === 'mpesa' ? '#3b82f6' : '#6b7280'} 
+                    />
+                    <Text style={[
+                      styles.paymentMethodText,
+                      paymentMethod === 'mpesa' && styles.paymentMethodTextActive
+                    ]}>M-Pesa</Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity
+                    style={[
+                      styles.paymentMethodOption,
+                      paymentMethod === 'card' && styles.paymentMethodActive
+                    ]}
+                    onPress={() => setPaymentMethod('card')}
+                  >
+                    <Ionicons 
+                      name="card-outline" 
+                      size={24} 
+                      color={paymentMethod === 'card' ? '#3b82f6' : '#6b7280'} 
+                    />
+                    <Text style={[
+                      styles.paymentMethodText,
+                      paymentMethod === 'card' && styles.paymentMethodTextActive
+                    ]}>Card</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          )}
+          
+          <TouchableOpacity
+            style={styles.processPaymentButton}
+            onPress={processPayment}
+          >
+            <Text style={styles.processPaymentButtonText}>Process Payment</Text>
+            <Ionicons name="checkmark-circle" size={20} color="#fff" />
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+
   const renderJobCard = ({ item }: { item: Job }) => {
     const showActionButton = item.status !== 'completed' && item.status !== 'paid';
     const buttonText = item.status === 'pending' ? 'Start Job' : 'Complete Job';
     const buttonAction = item.status === 'pending' ? startJob : completeJob;
+
+    const isAssignedToMe = isStaff && item.assigned_staff === userId;
 
     return (
       <View style={styles.card}>
@@ -309,13 +481,16 @@ export default function JobsScreen() {
         </View>
 
         <View style={styles.cardContent}>
-          {/* Plate Number */}
           <View style={styles.plateContainer}>
             <Ionicons name="car-outline" size={22} color="#3b82f6" />
             <Text style={styles.plateNumber}>{item.plate_number}</Text>
+            {isAssignedToMe && (
+              <View style={styles.assignedBadge}>
+                <Text style={styles.assignedText}>Assigned to you</Text>
+              </View>
+            )}
           </View>
 
-          {/* Service and Vehicle Row */}
           <View style={styles.detailsRow}>
             <View style={styles.detailItem}>
               <Text style={styles.detailLabel}>Service</Text>
@@ -327,7 +502,6 @@ export default function JobsScreen() {
             </View>
           </View>
 
-          {/* Price */}
           <View style={styles.priceContainer}>
             <Ionicons name="cash-outline" size={18} color="#059669" />
             <Text style={styles.priceLabel}>Amount:</Text>
@@ -357,7 +531,7 @@ export default function JobsScreen() {
         {item.status === 'completed' && (
           <TouchableOpacity
             style={[styles.actionButton, styles.paymentButton]}
-            onPress={() => Alert.alert('Coming Soon', 'Payment processing will be available soon')}
+            onPress={() => openPaymentModal(item)}
           >
             <Text style={styles.actionButtonText}>Process Payment</Text>
             <Ionicons name="cash-outline" size={20} color="#fff" />
@@ -374,20 +548,22 @@ export default function JobsScreen() {
     );
   };
 
-  const tabs = [
-    { key: 'pending', label: 'Pending', icon: 'time-outline' },
-    { key: 'in_progress', label: 'In Progress', icon: 'play-circle-outline' },
-    { key: 'completed', label: 'Completed', icon: 'checkmark-circle-outline' },
-    { key: 'paid', label: 'Paid', icon: 'cash-outline' },
-  ];
-
-  const handleTabChange = async (tabKey: JobStatus) => {
-    setActiveTab(tabKey);
-    await fetchJobs(tabKey);
-  };
-
-  if (loading) {
+  // Show loading spinner while auth is loading
+  if (authLoading || loading) {
     return <LoadingSpinner />;
+  }
+
+  if (error) {
+    return (
+      <View style={styles.errorContainer}>
+        <Ionicons name="alert-circle-outline" size={64} color="#ef4444" />
+        <Text style={styles.errorTitle}>Error</Text>
+        <Text style={styles.errorMessage}>{error}</Text>
+        <TouchableOpacity style={styles.retryButton} onPress={onRefresh}>
+          <Text style={styles.retryButtonText}>Try Again</Text>
+        </TouchableOpacity>
+      </View>
+    );
   }
 
   return (
@@ -395,15 +571,14 @@ export default function JobsScreen() {
       <View style={[styles.header, {paddingTop: insets.top + 8}]}>
         <Text style={styles.title}>Jobs</Text>
         <View style={styles.headerButtons}>
-          {role === 'owner' && (
-            <TouchableOpacity 
-              style={styles.iconButton} 
-              onPress={handleCreateJob}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="add-circle" size={32} color="#3b82f6" />
-            </TouchableOpacity>
-          )}
+          <TouchableOpacity 
+            style={styles.iconButton} 
+            onPress={handleCreateJob}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="add-circle" size={32} color="#3b82f6" />
+          </TouchableOpacity>
+          
           <TouchableOpacity 
             style={styles.iconButton} 
             onPress={() => setShowLogoutModal(true)}
@@ -453,12 +628,13 @@ export default function JobsScreen() {
         ListEmptyComponent={
           <EmptyState
             title={`No ${activeTab.replace('_', ' ')} jobs`}
-            message="All caught up! New jobs will appear here."
+            message="No jobs found. Pull down to refresh or create a new job."
           />
         }
       />
       
       <LogoutModal />
+      <PaymentModal />
     </View>
   );
 }
@@ -579,11 +755,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 12,
     gap: 8,
+    flexWrap: 'wrap',
   },
   plateNumber: {
     fontSize: 18,
     fontWeight: '700',
     color: '#1f2937',
+  },
+  assignedBadge: {
+    backgroundColor: '#dbeafe',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginLeft: 8,
+  },
+  assignedText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#1e40af',
   },
   detailsRow: {
     flexDirection: 'row',
@@ -654,7 +843,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
-  // Logout Modal Styles
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
@@ -721,5 +909,127 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#fff',
+  },
+  paymentModalContent: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    width: '90%',
+    maxHeight: '80%',
+  },
+  paymentModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+  },
+  paymentModalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1f2937',
+  },
+  paymentDetails: {
+    padding: 20,
+  },
+  paymentDetailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  paymentDetailLabel: {
+    fontSize: 14,
+    color: '#6b7280',
+  },
+  paymentDetailValue: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#1f2937',
+  },
+  paymentAmount: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#059669',
+  },
+  paymentMethodSection: {
+    marginTop: 20,
+  },
+  paymentMethodLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1f2937',
+    marginBottom: 12,
+  },
+  paymentMethods: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  paymentMethodOption: {
+    flex: 1,
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#fff',
+    gap: 8,
+  },
+  paymentMethodActive: {
+    borderColor: '#3b82f6',
+    backgroundColor: '#eff6ff',
+  },
+  paymentMethodText: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#6b7280',
+  },
+  paymentMethodTextActive: {
+    color: '#3b82f6',
+  },
+  processPaymentButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#10b981',
+    padding: 16,
+    margin: 20,
+    borderRadius: 12,
+    gap: 8,
+  },
+  processPaymentButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#fff',
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+    backgroundColor: '#f9fafb',
+  },
+  errorTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1f2937',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  errorMessage: {
+    fontSize: 14,
+    color: '#6b7280',
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  retryButton: {
+    backgroundColor: '#3b82f6',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
   },
 });

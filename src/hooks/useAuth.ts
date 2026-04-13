@@ -5,6 +5,7 @@ import { router } from 'expo-router';
 
 export const useAuth = () => {
   const [role, setRole] = useState<string | null>(null);
+  const [userId, setUserId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -12,14 +13,22 @@ export const useAuth = () => {
   }, []);
 
   const checkAuth = async () => {
-    const isAuth = await authService.isAuthenticated();
-    if (!isAuth) {
-      router.replace('/(auth)/login');
-    } else {
-      const userRole = await authService.getRole();
-      setRole(userRole);
+    try {
+      const isAuth = await authService.isAuthenticated();
+      if (!isAuth) {
+        router.replace('/(auth)/login');
+      } else {
+        const userRole = await authService.getRole();
+        const userNumberId = await authService.getUserId();
+        console.log('Auth loaded - Role:', userRole, 'UserId:', userNumberId);
+        setRole(userRole);
+        setUserId(userNumberId);
+      }
+    } catch (error) {
+      console.error('Auth check error:', error);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const logout = async () => {
@@ -27,5 +36,5 @@ export const useAuth = () => {
     router.replace('/(auth)/login');
   };
 
-  return { role, loading, logout };
+  return { role, userId, loading, logout };
 };
