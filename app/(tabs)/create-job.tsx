@@ -1,4 +1,4 @@
-// app/create-job.tsx
+// app/create-job.tsx - Updated with better error handling
 import React, { useState, useEffect } from 'react';
 import {
   View,
@@ -39,6 +39,8 @@ export default function CreateJob() {
   const [submitting, setSubmitting] = useState(false);
   const [showServiceModal, setShowServiceModal] = useState(false);
   const [showVehicleModal, setShowVehicleModal] = useState(false);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [createdJob, setCreatedJob] = useState<any>(null);
 
   const router = useRouter();
 
@@ -63,6 +65,12 @@ export default function CreateJob() {
     }
   };
 
+  const resetForm = () => {
+    setPlateNumber('');
+    setSelectedService(null);
+    setSelectedVehicle(null);
+  };
+
   const handleCreateJob = async () => {
     // Validation
     if (!plateNumber.trim()) {
@@ -79,26 +87,119 @@ export default function CreateJob() {
     }
 
     setSubmitting(true);
+    
+    // Prepare the request data
+    const requestData = {
+      plate_number: plateNumber.toUpperCase(),
+      service: selectedService.id,
+      vehicle_type: selectedVehicle.id,
+      status: 'pending',
+    };
+    
+    console.log('Sending request data:', requestData);
+    
     try {
-      await api.post('/jobs/', {
-        plate_number: plateNumber.toUpperCase(),
-        service: selectedService.id,
-        vehicle_type: selectedVehicle.id,
-        status: 'pending',
-      });
-
-      Alert.alert(
-        'Success', 
-        'Job created successfully', 
-        [{ text: 'OK', onPress: () => router.back() }]
-      );
-    } catch (error) {
-      console.error('Error creating job:', error);
-      Alert.alert('Error', 'Failed to create job. Please try again.');
+      const response = await api.post('/jobs/', requestData);
+      
+      console.log('Response:', response.data);
+      
+      setCreatedJob(response.data);
+      setShowSuccessModal(true);
+      resetForm(); // Clear the form
+      
+    } catch (error: any) {
+      // console.error('Error creating job:', error);
+      
+      // Detailed error logging
+      if (error.response) {
+        // The request was made and the server responded with a status code
+        // that falls out of the range of 2xx
+        // console.error('Response data:', error.response.data);
+        // console.error('Response status:', error.response.status);
+        // console.error('Response headers:', error.response.headers);
+        
+        // Show specific error message from API
+        const errorMessage = error.response.data?.message || 
+                            error.response.data?.error || 
+                            JSON.stringify(error.response.data);
+        Alert.alert('Error', `Failed to create job: ${errorMessage}`);
+      } else if (error.request) {
+        // The request was made but no response was received
+        // console.error('No response received:', error.request);
+        Alert.alert('Error', 'No response from server. Please check your connection.');
+      } else {
+        // Something happened in setting up the request that triggered an Error
+        // console.error('Error message:', error.message);
+        Alert.alert('Error', `Failed to create job: ${error.message}`);
+      }
     } finally {
       setSubmitting(false);
     }
   };
+
+  const handleViewJobs = () => {
+    setShowSuccessModal(false);
+    router.back();
+  };
+
+  const handleCreateAnother = () => {
+    setShowSuccessModal(false);
+    // Form is already cleared by resetForm()
+  };
+
+  const SuccessModal = () => (
+    <Modal
+      visible={showSuccessModal}
+      animationType="fade"
+      transparent={true}
+      onRequestClose={() => setShowSuccessModal(false)}
+    >
+      <View style={styles.successModalOverlay}>
+        <View style={styles.successModalContent}>
+          <View style={styles.successIconContainer}>
+            <Ionicons name="checkmark-circle" size={64} color="#10b981" />
+          </View>
+          <Text style={styles.successTitle}>Job Created Successfully!</Text>
+          <Text style={styles.successMessage}>
+            Job has been added to the pending list
+          </Text>
+          
+          {createdJob && (
+            <View style={styles.successDetails}>
+              <View style={styles.successDetailRow}>
+                <Text style={styles.successDetailLabel}>Plate Number:</Text>
+                <Text style={styles.successDetailValue}>{createdJob.plate_number}</Text>
+              </View>
+              <View style={styles.successDetailRow}>
+                <Text style={styles.successDetailLabel}>Service:</Text>
+                <Text style={styles.successDetailValue}>
+                  {services.find(s => s.id === createdJob.service)?.name || 'Selected Service'}
+                </Text>
+              </View>
+            </View>
+          )}
+          
+          <View style={styles.successButtons}>
+            <TouchableOpacity 
+              style={[styles.successButton, styles.createAnotherButton]}
+              onPress={handleCreateAnother}
+            >
+              <Ionicons name="add-circle-outline" size={20} color="#3b82f6" />
+              <Text style={styles.createAnotherButtonText}>Create Another</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={[styles.successButton, styles.viewJobsButton]}
+              onPress={handleViewJobs}
+            >
+              <Ionicons name="eye-outline" size={20} color="#fff" />
+              <Text style={styles.viewJobsButtonText}>View Jobs</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
 
   const ServiceModal = () => (
     <Modal
@@ -342,6 +443,7 @@ export default function CreateJob() {
 
       <ServiceModal />
       <VehicleModal />
+      <SuccessModal />
     </KeyboardAvoidingView>
   );
 }
@@ -573,6 +675,90 @@ const styles = StyleSheet.create({
   createButtonText: {
     fontSize: 16,
     fontWeight: '700',
+    color: '#fff',
+  },
+  // Success Modal Styles
+  successModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  successModalContent: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 24,
+    width: '85%',
+    alignItems: 'center',
+  },
+  successIconContainer: {
+    marginBottom: 16,
+  },
+  successTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1f2937',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  successMessage: {
+    fontSize: 14,
+    color: '#6b7280',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  successDetails: {
+    backgroundColor: '#f3f4f6',
+    borderRadius: 12,
+    padding: 16,
+    width: '100%',
+    marginBottom: 20,
+  },
+  successDetailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  successDetailLabel: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#6b7280',
+  },
+  successDetailValue: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1f2937',
+  },
+  successButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+  },
+  successButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 10,
+    gap: 8,
+  },
+  createAnotherButton: {
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#3b82f6',
+  },
+  createAnotherButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#3b82f6',
+  },
+  viewJobsButton: {
+    backgroundColor: '#3b82f6',
+  },
+  viewJobsButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
     color: '#fff',
   },
 });

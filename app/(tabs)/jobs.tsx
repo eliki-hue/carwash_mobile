@@ -10,7 +10,7 @@ import {
   Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useAuth } from '../../src/hooks/useAuth';
 import { Ionicons } from '@expo/vector-icons';
 import api from '../../src/services/api';
@@ -83,6 +83,12 @@ export default function JobsScreen() {
     }
   };
 
+  useFocusEffect(
+    useCallback(() => {
+      fetchAllJobCounts(); // 🔥 your existing function
+    }, [])
+  );
+
   const fetchAllJobCounts = async () => {
     try {
       const statuses: JobStatus[] = ['pending', 'in_progress', 'completed', 'paid'];
@@ -103,7 +109,7 @@ export default function JobsScreen() {
       
       setJobCounts(counts);
     } catch (error) {
-      console.error('Error fetching job counts:', error);
+      // console.error('Error fetching job counts:', error);
     }
   };
 
@@ -114,7 +120,7 @@ export default function JobsScreen() {
                       (response.data.results || []);
       setJobs(jobsData);
     } catch (error) {
-      console.error('Error fetching jobs:', error);
+      // console.error('Error fetching jobs:', error);
       Alert.alert('Error', 'Failed to load jobs');
       setJobs([]);
     }
