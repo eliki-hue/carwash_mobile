@@ -23,7 +23,7 @@ export default function Jobs() {
 
   return (
     <View style={{ flex: 1, padding: 10 }}>
-      <Button title="New Job" onPress={() => router.push("/(tabs)/create-job")} />
+      <Button title="New Job" onPress={() => router.push("/create-jobs")} />
 
       <FlatList
         data={jobs}
