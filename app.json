@@ -4,25 +4,20 @@
     "slug": "carwash-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
-
     "icon": "./assets/images/icon.png",
     "scheme": "carwashmobile",
     "userInterfaceStyle": "automatic",
-
     "android": {
       "package": "com.eliki.carwash",
       "versionCode": 1,
-
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundColor": "#ffffff"
       }
     },
-
     "web": {
       "favicon": "./assets/images/favicon.png"
     },
-
     "plugins": [
       "expo-router",
       [
@@ -33,6 +28,12 @@
           "backgroundColor": "#ffffff"
         }
       ]
-    ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "94596e7a-d603-48d1-867c-815045250065"
+      }
+    }
   }
 }
