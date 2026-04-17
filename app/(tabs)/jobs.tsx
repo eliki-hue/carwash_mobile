@@ -9,6 +9,9 @@ import {
   TouchableOpacity,
   Alert,
   Modal,
+  ScrollView,
+  TextInput,
+  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -17,6 +20,7 @@ import { Ionicons } from '@expo/vector-icons';
 import api from '../../src/services/api';
 import { LoadingSpinner } from '../../components/LoadingSpinner';
 import { EmptyState } from '../../components/EmptyState';
+import { paymentService } from '@/src/services/payment';
 
 interface Service {
   id: number;
@@ -56,6 +60,12 @@ export default function JobsScreen() {
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [paymentMethod, setPaymentMethod] = useState('cash');
+  const [showMpesaForm, setShowMpesaForm] = useState(false);
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [transactionId, setTransactionId] = useState('');
+  const [processingSTK, setProcessingSTK] = useState(false);
+  const [stkStatus, setStkStatus] = useState('');
+  const [submitting, setSubmitting] = useState(false);
   const [jobCounts, setJobCounts] = useState({
     pending: 0,
     in_progress: 0,
@@ -70,16 +80,13 @@ export default function JobsScreen() {
   
   const isOwner = role === 'owner';
   const isStaff = role === 'staff';
-  
-  // Wait for auth to load before fetching data
+
   useEffect(() => {
     if (!authLoading && role) {
-      console.log('Auth loaded - Role:', role, 'UserId:', userId);
       loadInitialData();
     }
   }, [authLoading, role]);
-  
-  // Refresh when screen comes into focus
+
   useFocusEffect(
     useCallback(() => {
       if (!authLoading && role) {
@@ -100,9 +107,6 @@ export default function JobsScreen() {
       setError(null);
       setLoading(true);
       
-      console.log('Loading initial data for role:', role);
-      
-      // Try to fetch services and vehicles
       try {
         const [servicesRes, vehiclesRes] = await Promise.all([
           api.get('/services/'),
@@ -110,7 +114,6 @@ export default function JobsScreen() {
         ]);
         setServices(servicesRes.data);
         setVehicles(vehiclesRes.data);
-        console.log('Services and vehicles loaded successfully');
       } catch (error: any) {
         console.log('Error fetching services/vehicles:', error.response?.status);
       }
@@ -131,12 +134,10 @@ export default function JobsScreen() {
       
       for (const status of statuses) {
         try {
-          console.log(`Fetching ${status} jobs count...`);
           const response = await api.get(`/jobs/?status=${status}`);
           const jobsData = Array.isArray(response.data) ? response.data : 
                           (response.data.results || []);
           counts[status] = jobsData.length;
-          console.log(`${status} jobs count:`, jobsData.length);
         } catch (error: any) {
           console.error(`Error fetching ${status} count:`, error.response?.status);
         }
@@ -151,23 +152,12 @@ export default function JobsScreen() {
   const fetchJobs = async (status: string) => {
     try {
       setError(null);
-      console.log(`Fetching jobs with status: ${status}`);
-      console.log(`User role: ${role}, User ID: ${userId}`);
-      
       const response = await api.get(`/jobs/?status=${status}`);
-      console.log('API Response status:', response.status);
-      
       const jobsData = Array.isArray(response.data) ? response.data : 
                       (response.data.results || []);
-      
-      console.log(`Found ${jobsData.length} jobs`);
       setJobs(jobsData);
-      
-      if (jobsData.length === 0) {
-        console.log('No jobs found for status:', status);
-      }
     } catch (error: any) {
-      console.error('Error fetching jobs:', error.response?.status, error.response?.data);
+      console.error('Error fetching jobs:', error);
       setError('Failed to load jobs. Please try again.');
       setJobs([]);
     }
@@ -182,47 +172,143 @@ export default function JobsScreen() {
 
   const startJob = async (jobId: number) => {
     try {
-      console.log(`Starting job ${jobId}`);
       await api.post(`/jobs/${jobId}/start/`);
       await refreshAllData();
       Alert.alert('Success', 'Job started successfully');
     } catch (error: any) {
-      console.error('Start job error:', error.response?.data);
       Alert.alert('Error', error.response?.data?.message || 'Failed to start job');
     }
   };
 
   const completeJob = async (jobId: number) => {
     try {
-      console.log(`Completing job ${jobId}`);
       await api.patch(`/jobs/${jobId}/complete/`);
       await refreshAllData();
       Alert.alert('Success', 'Job completed successfully');
     } catch (error: any) {
-      console.error('Complete job error:', error.response?.data);
       Alert.alert('Error', error.response?.data?.message || 'Failed to complete job');
     }
   };
 
-  const processPayment = async () => {
+  const processPayment = async (method: string, details?: any) => {
     if (!selectedJob) return;
     
+    setSubmitting(true);
     try {
-      console.log(`Processing payment for job ${selectedJob.id}`);
-      await api.patch(`/jobs/${selectedJob.id}/pay/`, {
-        payment_method: paymentMethod,
+      const paymentData: any = {
+        job: selectedJob.id,
         amount: selectedJob.price,
+        payment_method: method,
+        status: 'completed',
         processed_by: userId,
+      };
+      
+      if (method === 'mpesa_manual' && details?.transaction_id) {
+        paymentData.transaction_id = details.transaction_id;
+        paymentData.mpesa_receipt = details.transaction_id;
+      }
+      
+      if (method === 'mpesa_stk' && details?.checkout_request_id) {
+        paymentData.checkout_request_id = details.checkout_request_id;
+        paymentData.mpesa_receipt = details.checkout_request_id;
+      }
+      
+      await api.post('/payments/', paymentData);
+      
+      await api.patch(`/jobs/${selectedJob.id}/`, {
+        status: 'paid'
       });
       
       await refreshAllData();
       
       setShowPaymentModal(false);
       setSelectedJob(null);
+      setPaymentMethod('cash');
+      setPhoneNumber('');
+      setTransactionId('');
+      setShowMpesaForm(false);
+      setProcessingSTK(false);
+      setStkStatus('');
+      
       Alert.alert('Success', 'Payment processed successfully');
     } catch (error: any) {
-      console.error('Payment error:', error.response?.data);
+      console.error('Payment error:', error);
       Alert.alert('Error', error.response?.data?.message || 'Failed to process payment');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleMpesaManual = () => {
+    if (!transactionId.trim()) {
+      Alert.alert('Error', 'Please enter transaction ID');
+      return;
+    }
+    processPayment('mpesa_manual', { transaction_id: transactionId });
+  };
+
+  const handleSTKPush = async () => {
+    if (!phoneNumber.trim()) {
+      Alert.alert('Error', 'Please enter phone number');
+      return;
+    }
+    if (!selectedJob) {
+      throw new Error('No job selected');
+    }
+
+    let formattedPhone = phoneNumber.replace(/\s/g, '');
+    if (formattedPhone.startsWith('0')) {
+      formattedPhone = '254' + formattedPhone.substring(1);
+    } else if (formattedPhone.startsWith('+254')) {
+      formattedPhone = formattedPhone.substring(1);
+    } else if (!formattedPhone.startsWith('254')) {
+      formattedPhone = '254' + formattedPhone;
+    }
+    
+    setProcessingSTK(true);
+    setStkStatus('Initiating payment...');
+    
+    try {
+      const response = await paymentService.initiateSTKPush(
+        selectedJob.id,
+        formattedPhone
+      );
+
+      
+      setStkStatus('Payment request sent. Check your phone...');
+      
+      const interval = setInterval(async () => {
+        try {
+          const statusRes = await api.get(`/payments/status/${response.data.checkout_request_id}`);
+          if (statusRes.data.status === 'completed') {
+            clearInterval(interval);
+            setStkStatus('Payment successful!');
+            setTimeout(() => {
+              processPayment('mpesa_stk', { checkout_request_id: response.data.checkout_request_id });
+            }, 1500);
+          } else if (statusRes.data.status === 'failed') {
+            clearInterval(interval);
+            setStkStatus('Payment failed. Please try again.');
+            setProcessingSTK(false);
+          }
+        } catch (error) {
+          console.error('Error checking payment status:', error);
+        }
+      }, 3000);
+      
+      setTimeout(() => {
+        clearInterval(interval);
+        if (processingSTK) {
+          setStkStatus('Payment timeout. Please try again.');
+          setProcessingSTK(false);
+        }
+      }, 60000);
+      
+    } catch (error: any) {
+      console.error('STK Push error:', error);
+      setStkStatus(error.response?.data?.message || 'Payment failed. Please try again.');
+      setProcessingSTK(false);
+      setTimeout(() => setStkStatus(''), 3000);
     }
   };
 
@@ -306,17 +392,229 @@ export default function JobsScreen() {
     setShowPaymentModal(true);
   };
 
-  const tabs = [
-    { key: 'pending', label: 'Pending', icon: 'time-outline' },
-    { key: 'in_progress', label: 'In Progress', icon: 'play-circle-outline' },
-    { key: 'completed', label: 'Completed', icon: 'checkmark-circle-outline' },
-    { key: 'paid', label: 'Paid', icon: 'cash-outline' },
-  ];
-
-  const handleTabChange = async (tabKey: JobStatus) => {
-    setActiveTab(tabKey);
-    await fetchJobs(tabKey);
-  };
+  const PaymentModal = () => (
+    <Modal
+      visible={showPaymentModal}
+      animationType="slide"
+      transparent={true}
+      onRequestClose={() => {
+        setShowPaymentModal(false);
+        setShowMpesaForm(false);
+        setPhoneNumber('');
+        setTransactionId('');
+        setProcessingSTK(false);
+        setStkStatus('');
+      }}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.paymentModalContent}>
+          <View style={styles.paymentModalHeader}>
+            <Text style={styles.paymentModalTitle}>Process Payment</Text>
+            <TouchableOpacity onPress={() => {
+              setShowPaymentModal(false);
+              setShowMpesaForm(false);
+              setPhoneNumber('');
+              setTransactionId('');
+              setProcessingSTK(false);
+              setStkStatus('');
+            }}>
+              <Ionicons name="close" size={24} color="#6b7280" />
+            </TouchableOpacity>
+          </View>
+          
+          <ScrollView showsVerticalScrollIndicator={false}>
+            {selectedJob && (
+              <View style={styles.paymentDetails}>
+                <View style={styles.paymentDetailRow}>
+                  <Text style={styles.paymentDetailLabel}>Plate Number:</Text>
+                  <Text style={styles.paymentDetailValue}>{selectedJob.plate_number}</Text>
+                </View>
+                <View style={styles.paymentDetailRow}>
+                  <Text style={styles.paymentDetailLabel}>Service:</Text>
+                  <Text style={styles.paymentDetailValue}>
+                    {getServiceName(selectedJob.service)}
+                  </Text>
+                </View>
+                <View style={styles.paymentDetailRow}>
+                  <Text style={styles.paymentDetailLabel}>Amount:</Text>
+                  <Text style={styles.paymentAmount}>
+                    KES {parseFloat(selectedJob.price).toLocaleString()}
+                  </Text>
+                </View>
+                
+                {!showMpesaForm && (
+                  <View style={styles.paymentMethodSection}>
+                    <Text style={styles.paymentMethodLabel}>Select Payment Method</Text>
+                    <View style={styles.paymentMethods}>
+                      <TouchableOpacity
+                        style={[
+                          styles.paymentMethodOption,
+                          paymentMethod === 'cash' && styles.paymentMethodActive
+                        ]}
+                        onPress={() => setPaymentMethod('cash')}
+                      >
+                        <Ionicons 
+                          name="cash-outline" 
+                          size={24} 
+                          color={paymentMethod === 'cash' ? '#3b82f6' : '#6b7280'} 
+                        />
+                        <Text style={[
+                          styles.paymentMethodText,
+                          paymentMethod === 'cash' && styles.paymentMethodTextActive
+                        ]}>Cash</Text>
+                      </TouchableOpacity>
+                      
+                      <TouchableOpacity
+                        style={[
+                          styles.paymentMethodOption,
+                          paymentMethod === 'mpesa' && styles.paymentMethodActive
+                        ]}
+                        onPress={() => {
+                          setPaymentMethod('mpesa');
+                          setShowMpesaForm(true);
+                        }}
+                      >
+                        <Ionicons 
+                          name="phone-portrait-outline" 
+                          size={24} 
+                          color={paymentMethod === 'mpesa' ? '#3b82f6' : '#6b7280'} 
+                        />
+                        <Text style={[
+                          styles.paymentMethodText,
+                          paymentMethod === 'mpesa' && styles.paymentMethodTextActive
+                        ]}>M-Pesa</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                )}
+                
+                {showMpesaForm && (
+                  <View style={styles.mpesaSection}>
+                    <View style={styles.mpesaOptions}>
+                      <TouchableOpacity
+                        style={styles.backButton}
+                        onPress={() => {
+                          setShowMpesaForm(false);
+                          setPaymentMethod('cash');
+                          setPhoneNumber('');
+                          setTransactionId('');
+                          setStkStatus('');
+                        }}
+                      >
+                        <Ionicons name="arrow-back" size={20} color="#3b82f6" />
+                        <Text style={styles.backButtonText}>Back to payment methods</Text>
+                      </TouchableOpacity>
+                      
+                      <Text style={styles.mpesaTitle}>M-Pesa Payment</Text>
+                      
+                      <View style={styles.mpesaOptionCard}>
+                        <Text style={styles.optionTitle}>STK Push (Prompt on Phone)</Text>
+                        <Text style={styles.optionDescription}>
+                          Customer will receive a prompt on their phone to enter PIN
+                        </Text>
+                        
+                        <View style={styles.inputGroup}>
+                          <Text style={styles.inputLabel}>Phone Number</Text>
+                          <TextInput
+                            style={styles.input}
+                            placeholder="0712345678"
+                            placeholderTextColor="#9ca3af"
+                            value={phoneNumber}
+                            onChangeText={setPhoneNumber}
+                            keyboardType="phone-pad"
+                            editable={!processingSTK}
+                          />
+                          <Text style={styles.inputHint}>
+                            Enter the customer's M-Pesa registered phone number
+                          </Text>
+                        </View>
+                        
+                        {stkStatus ? (
+                          <View style={styles.stkStatusContainer}>
+                            <ActivityIndicator size="small" color="#3b82f6" />
+                            <Text style={styles.stkStatusText}>{stkStatus}</Text>
+                          </View>
+                        ) : (
+                          <TouchableOpacity
+                            style={styles.stkButton}
+                            onPress={handleSTKPush}
+                            disabled={!phoneNumber.trim() || processingSTK}
+                          >
+                            <Text style={styles.stkButtonText}>Send Payment Request</Text>
+                            <Ionicons name="send-outline" size={18} color="#fff" />
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                      
+                      <View style={styles.divider}>
+                        <View style={styles.dividerLine} />
+                        <Text style={styles.dividerText}>OR</Text>
+                        <View style={styles.dividerLine} />
+                      </View>
+                      
+                      <View style={styles.mpesaOptionCard}>
+                        <Text style={styles.optionTitle}>Manual Entry</Text>
+                        <Text style={styles.optionDescription}>
+                          Enter M-Pesa transaction ID after customer completes payment
+                        </Text>
+                        
+                        <View style={styles.inputGroup}>
+                          <Text style={styles.inputLabel}>Transaction ID / M-Pesa Receipt</Text>
+                          <TextInput
+                            style={styles.input}
+                            placeholder="e.g., QWER12TY"
+                            placeholderTextColor="#9ca3af"
+                            value={transactionId}
+                            onChangeText={setTransactionId}
+                            autoCapitalize="characters"
+                          />
+                          <Text style={styles.inputHint}>
+                            Enter the transaction ID from the M-Pesa message
+                          </Text>
+                        </View>
+                        
+                        <TouchableOpacity
+                          style={styles.manualButton}
+                          onPress={handleMpesaManual}
+                          disabled={!transactionId.trim() || submitting}
+                        >
+                          {submitting ? (
+                            <ActivityIndicator color="#fff" size="small" />
+                          ) : (
+                            <>
+                              <Text style={styles.manualButtonText}>Verify & Complete Payment</Text>
+                              <Ionicons name="checkmark-circle" size={18} color="#fff" />
+                            </>
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  </View>
+                )}
+              </View>
+            )}
+            
+            {!showMpesaForm && paymentMethod === 'cash' && (
+              <TouchableOpacity
+                style={styles.processPaymentButton}
+                onPress={() => processPayment('cash')}
+                disabled={submitting}
+              >
+                {submitting ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <>
+                    <Text style={styles.processPaymentButtonText}>Complete Cash Payment</Text>
+                    <Ionicons name="checkmark-circle" size={20} color="#fff" />
+                  </>
+                )}
+              </TouchableOpacity>
+            )}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
 
   const LogoutModal = () => (
     <Modal
@@ -331,9 +629,7 @@ export default function JobsScreen() {
             <Ionicons name="log-out-outline" size={48} color="#ef4444" />
           </View>
           <Text style={styles.logoutTitle}>Logout</Text>
-          <Text style={styles.logoutMessage}>
-            Are you sure you want to logout?
-          </Text>
+          <Text style={styles.logoutMessage}>Are you sure you want to logout?</Text>
           <View style={styles.logoutButtons}>
             <TouchableOpacity 
               style={[styles.logoutButton, styles.cancelButton]}
@@ -354,119 +650,10 @@ export default function JobsScreen() {
     </Modal>
   );
 
-  const PaymentModal = () => (
-    <Modal
-      visible={showPaymentModal}
-      animationType="slide"
-      transparent={true}
-      onRequestClose={() => setShowPaymentModal(false)}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.paymentModalContent}>
-          <View style={styles.paymentModalHeader}>
-            <Text style={styles.paymentModalTitle}>Process Payment</Text>
-            <TouchableOpacity onPress={() => setShowPaymentModal(false)}>
-              <Ionicons name="close" size={24} color="#6b7280" />
-            </TouchableOpacity>
-          </View>
-          
-          {selectedJob && (
-            <View style={styles.paymentDetails}>
-              <View style={styles.paymentDetailRow}>
-                <Text style={styles.paymentDetailLabel}>Plate Number:</Text>
-                <Text style={styles.paymentDetailValue}>{selectedJob.plate_number}</Text>
-              </View>
-              <View style={styles.paymentDetailRow}>
-                <Text style={styles.paymentDetailLabel}>Service:</Text>
-                <Text style={styles.paymentDetailValue}>
-                  {getServiceName(selectedJob.service)}
-                </Text>
-              </View>
-              <View style={styles.paymentDetailRow}>
-                <Text style={styles.paymentDetailLabel}>Amount:</Text>
-                <Text style={styles.paymentAmount}>
-                  KES {parseFloat(selectedJob.price).toLocaleString()}
-                </Text>
-              </View>
-              
-              <View style={styles.paymentMethodSection}>
-                <Text style={styles.paymentMethodLabel}>Payment Method</Text>
-                <View style={styles.paymentMethods}>
-                  <TouchableOpacity
-                    style={[
-                      styles.paymentMethodOption,
-                      paymentMethod === 'cash' && styles.paymentMethodActive
-                    ]}
-                    onPress={() => setPaymentMethod('cash')}
-                  >
-                    <Ionicons 
-                      name="cash-outline" 
-                      size={24} 
-                      color={paymentMethod === 'cash' ? '#3b82f6' : '#6b7280'} 
-                    />
-                    <Text style={[
-                      styles.paymentMethodText,
-                      paymentMethod === 'cash' && styles.paymentMethodTextActive
-                    ]}>Cash</Text>
-                  </TouchableOpacity>
-                  
-                  <TouchableOpacity
-                    style={[
-                      styles.paymentMethodOption,
-                      paymentMethod === 'mpesa' && styles.paymentMethodActive
-                    ]}
-                    onPress={() => setPaymentMethod('mpesa')}
-                  >
-                    <Ionicons 
-                      name="phone-portrait-outline" 
-                      size={24} 
-                      color={paymentMethod === 'mpesa' ? '#3b82f6' : '#6b7280'} 
-                    />
-                    <Text style={[
-                      styles.paymentMethodText,
-                      paymentMethod === 'mpesa' && styles.paymentMethodTextActive
-                    ]}>M-Pesa</Text>
-                  </TouchableOpacity>
-                  
-                  <TouchableOpacity
-                    style={[
-                      styles.paymentMethodOption,
-                      paymentMethod === 'card' && styles.paymentMethodActive
-                    ]}
-                    onPress={() => setPaymentMethod('card')}
-                  >
-                    <Ionicons 
-                      name="card-outline" 
-                      size={24} 
-                      color={paymentMethod === 'card' ? '#3b82f6' : '#6b7280'} 
-                    />
-                    <Text style={[
-                      styles.paymentMethodText,
-                      paymentMethod === 'card' && styles.paymentMethodTextActive
-                    ]}>Card</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </View>
-          )}
-          
-          <TouchableOpacity
-            style={styles.processPaymentButton}
-            onPress={processPayment}
-          >
-            <Text style={styles.processPaymentButtonText}>Process Payment</Text>
-            <Ionicons name="checkmark-circle" size={20} color="#fff" />
-          </TouchableOpacity>
-        </View>
-      </View>
-    </Modal>
-  );
-
   const renderJobCard = ({ item }: { item: Job }) => {
     const showActionButton = item.status !== 'completed' && item.status !== 'paid';
     const buttonText = item.status === 'pending' ? 'Start Job' : 'Complete Job';
     const buttonAction = item.status === 'pending' ? startJob : completeJob;
-
     const isAssignedToMe = isStaff && item.assigned_staff === userId;
 
     return (
@@ -548,7 +735,18 @@ export default function JobsScreen() {
     );
   };
 
-  // Show loading spinner while auth is loading
+  const tabs = [
+    { key: 'pending', label: 'Pending', icon: 'time-outline' },
+    { key: 'in_progress', label: 'In Progress', icon: 'play-circle-outline' },
+    { key: 'completed', label: 'Completed', icon: 'checkmark-circle-outline' },
+    { key: 'paid', label: 'Paid', icon: 'cash-outline' },
+  ];
+
+  const handleTabChange = async (tabKey: JobStatus) => {
+    setActiveTab(tabKey);
+    await fetchJobs(tabKey);
+  };
+
   if (authLoading || loading) {
     return <LoadingSpinner />;
   }
@@ -1031,5 +1229,129 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
     fontWeight: '600',
+  },
+  mpesaSection: {
+    marginTop: 16,
+  },
+  mpesaOptions: {
+    gap: 16,
+  },
+  backButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+    alignSelf: 'flex-start',
+  },
+  backButtonText: {
+    fontSize: 14,
+    color: '#3b82f6',
+    fontWeight: '500',
+  },
+  mpesaTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1f2937',
+    marginBottom: 8,
+  },
+  mpesaOptionCard: {
+    backgroundColor: '#f9fafb',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  optionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1f2937',
+    marginBottom: 4,
+  },
+  optionDescription: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginBottom: 16,
+  },
+  inputGroup: {
+    marginBottom: 16,
+  },
+  inputLabel: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#374151',
+    marginBottom: 6,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    backgroundColor: '#fff',
+  },
+  inputHint: {
+    fontSize: 11,
+    color: '#9ca3af',
+    marginTop: 4,
+  },
+  stkButton: {
+    backgroundColor: '#3b82f6',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    borderRadius: 8,
+    marginTop: 8,
+  },
+  stkButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#fff',
+  },
+  stkStatusContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    backgroundColor: '#eff6ff',
+    borderRadius: 8,
+    marginTop: 8,
+  },
+  stkStatusText: {
+    fontSize: 13,
+    color: '#3b82f6',
+  },
+  manualButton: {
+    backgroundColor: '#10b981',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    borderRadius: 8,
+    marginTop: 8,
+  },
+  manualButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#fff',
+  },
+  divider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginVertical: 8,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#e5e7eb',
+  },
+  dividerText: {
+    fontSize: 12,
+    color: '#9ca3af',
   },
 });
