@@ -20,7 +20,6 @@ import { Ionicons } from '@expo/vector-icons';
 import api from '../../src/services/api';
 import { LoadingSpinner } from '../../components/LoadingSpinner';
 import { EmptyState } from '../../components/EmptyState';
-import { paymentService } from '@/src/services/payment';
 
 interface Service {
   id: number;
@@ -40,14 +39,14 @@ interface Job {
   service: number;
   vehicle_type: number;
   price: string;
-  status: 'pending' | 'in_progress' | 'completed' | 'paid';
+  status: 'pending' | 'in_progress' | 'completed';
   assigned_staff?: number | null;
   created_at: string;
   started_at?: string | null;
   completed_at?: string | null;
 }
 
-type JobStatus = 'pending' | 'in_progress' | 'completed' | 'paid';
+type JobStatus = 'pending' | 'in_progress' | 'completed';
 
 export default function JobsScreen() {
   const [activeTab, setActiveTab] = useState<JobStatus>('pending');
@@ -59,7 +58,6 @@ export default function JobsScreen() {
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
-  const [paymentMethod, setPaymentMethod] = useState('cash');
   const [showMpesaForm, setShowMpesaForm] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState('');
   const [transactionId, setTransactionId] = useState('');
@@ -69,8 +67,7 @@ export default function JobsScreen() {
   const [jobCounts, setJobCounts] = useState({
     pending: 0,
     in_progress: 0,
-    completed: 0,
-    paid: 0
+    completed: 0
   });
   const [error, setError] = useState<string | null>(null);
   
@@ -78,7 +75,6 @@ export default function JobsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   
-  const isOwner = role === 'owner';
   const isStaff = role === 'staff';
 
   useEffect(() => {
@@ -96,10 +92,8 @@ export default function JobsScreen() {
   );
 
   const refreshAllData = async () => {
-    await Promise.all([
-      fetchAllJobCounts(),
-      fetchJobs(activeTab)
-    ]);
+    await fetchAllJobCounts();
+    await fetchJobs(activeTab);
   };
 
   const loadInitialData = async () => {
@@ -129,8 +123,8 @@ export default function JobsScreen() {
 
   const fetchAllJobCounts = async () => {
     try {
-      const statuses: JobStatus[] = ['pending', 'in_progress', 'completed', 'paid'];
-      const counts = { pending: 0, in_progress: 0, completed: 0, paid: 0 };
+      const statuses: JobStatus[] = ['pending', 'in_progress', 'completed'];
+      const counts = { pending: 0, in_progress: 0, completed: 0 };
       
       for (const status of statuses) {
         try {
@@ -172,7 +166,10 @@ export default function JobsScreen() {
 
   const startJob = async (jobId: number) => {
     try {
-      await api.post(`/jobs/${jobId}/start/`);
+      await api.patch(`/jobs/${jobId}/`, {
+        status: 'in_progress',
+        started_at: new Date().toISOString()
+      });
       await refreshAllData();
       Alert.alert('Success', 'Job started successfully');
     } catch (error: any) {
@@ -180,50 +177,42 @@ export default function JobsScreen() {
     }
   };
 
-  const completeJob = async (jobId: number) => {
-    try {
-      await api.patch(`/jobs/${jobId}/complete/`);
-      await refreshAllData();
-      Alert.alert('Success', 'Job completed successfully');
-    } catch (error: any) {
-      Alert.alert('Error', error.response?.data?.message || 'Failed to complete job');
-    }
-  };
-
-  const processPayment = async (method: string, details?: any) => {
-    if (!selectedJob) return;
-    
+  const processPayment = async (job: Job, methodType: string, details?: any) => {
     setSubmitting(true);
     try {
       const paymentData: any = {
-        job: selectedJob.id,
-        amount: selectedJob.price,
-        payment_method: method,
-        status: 'completed',
+        job: job.id,
+        method: methodType,  // For the model field
+        // payment_method: methodType,  // For the serializer's validate method
+        amount: parseFloat(job.price),
+        status: 'success',
         processed_by: userId,
       };
       
-      if (method === 'mpesa_manual' && details?.transaction_id) {
+      if (methodType === 'mpesa_manual' && details?.transaction_id) {
         paymentData.transaction_id = details.transaction_id;
-        paymentData.mpesa_receipt = details.transaction_id;
       }
       
-      if (method === 'mpesa_stk' && details?.checkout_request_id) {
+      if (methodType === 'mpesa_stk' && details?.checkout_request_id) {
+        paymentData.phone_number = details.phone_number;
         paymentData.checkout_request_id = details.checkout_request_id;
-        paymentData.mpesa_receipt = details.checkout_request_id;
       }
       
-      await api.post('/payments/', paymentData);
-      
-      await api.patch(`/jobs/${selectedJob.id}/`, {
-        status: 'paid'
+      console.log('Sending payment data:', JSON.stringify(paymentData, null, 2));
+      await api.patch(`/jobs/${job.id}/`, {
+        status: 'completed',
+        completed_at: new Date().toISOString()
       });
+      
+      const paymentResponse = await api.post('/payments/', paymentData);
+      console.log('Payment response:', paymentResponse.data);
+      
+      
       
       await refreshAllData();
       
       setShowPaymentModal(false);
       setSelectedJob(null);
-      setPaymentMethod('cash');
       setPhoneNumber('');
       setTransactionId('');
       setShowMpesaForm(false);
@@ -232,28 +221,43 @@ export default function JobsScreen() {
       
       Alert.alert('Success', 'Payment processed successfully');
     } catch (error: any) {
-      console.error('Payment error:', error);
-      Alert.alert('Error', error.response?.data?.message || 'Failed to process payment');
+      console.error('Payment error - Response data:', error.response?.data);
+      console.log("STATUS:", error.response?.status);
+      console.log("HEADERS:", error.response?.headers);
+      console.log("DATA:", error.response?.data);
+      
+      let errorMessage = 'Failed to process payment';
+      if (error.response?.data?.message) {
+        errorMessage = error.response.data.message;
+      } else if (error.response?.data?.error) {
+        errorMessage = error.response.data.error;
+      } else if (typeof error.response?.data === 'string') {
+        errorMessage = error.response.data;
+      }
+      
+      Alert.alert('Payment Error', errorMessage);
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleMpesaManual = () => {
+  const handleCashPayment = (job: Job) => {
+    processPayment(job, 'cash');
+  };
+
+  const handleMpesaManual = (job: Job) => {
     if (!transactionId.trim()) {
       Alert.alert('Error', 'Please enter transaction ID');
       return;
     }
-    processPayment('mpesa_manual', { transaction_id: transactionId });
+    processPayment(job, 'mpesa_manual', { transaction_id: transactionId });
+    setTransactionId('');
   };
 
-  const handleSTKPush = async () => {
+  const handleSTKPush = async (job: Job) => {
     if (!phoneNumber.trim()) {
       Alert.alert('Error', 'Please enter phone number');
       return;
-    }
-    if (!selectedJob) {
-      throw new Error('No job selected');
     }
 
     let formattedPhone = phoneNumber.replace(/\s/g, '');
@@ -269,22 +273,28 @@ export default function JobsScreen() {
     setStkStatus('Initiating payment...');
     
     try {
-      const response = await paymentService.initiateSTKPush(
-        selectedJob.id,
-        formattedPhone
-      );
-
+      const response = await api.post('/payments/mpesa_stkpush/', {
+        job: job.id,
+        phone_number: formattedPhone,
+      });
+      
+      console.log('STK Push response:', response.data);
       
       setStkStatus('Payment request sent. Check your phone...');
       
+      const checkoutRequestId = response.data.checkout_request_id;
+      
       const interval = setInterval(async () => {
         try {
-          const statusRes = await api.get(`/payments/status/${response.data.checkout_request_id}`);
-          if (statusRes.data.status === 'completed') {
+          const statusRes = await api.get(`/payments/status/${checkoutRequestId}`);
+          if (statusRes.data.status === 'success') {
             clearInterval(interval);
             setStkStatus('Payment successful!');
             setTimeout(() => {
-              processPayment('mpesa_stk', { checkout_request_id: response.data.checkout_request_id });
+              processPayment(job, 'mpesa_stk', { 
+                checkout_request_id: checkoutRequestId,
+                phone_number: formattedPhone 
+              });
             }, 1500);
           } else if (statusRes.data.status === 'failed') {
             clearInterval(interval);
@@ -305,8 +315,8 @@ export default function JobsScreen() {
       }, 60000);
       
     } catch (error: any) {
-      console.error('STK Push error:', error);
-      setStkStatus(error.response?.data?.message || 'Payment failed. Please try again.');
+      console.error('STK Push error:', error.response?.data || error);
+      setStkStatus(error.response?.data?.error || 'Payment failed. Please try again.');
       setProcessingSTK(false);
       setTimeout(() => setStkStatus(''), 3000);
     }
@@ -334,8 +344,6 @@ export default function JobsScreen() {
       case 'in_progress':
         return '#dbeafe';
       case 'completed':
-        return '#d1fae5';
-      case 'paid':
         return '#a7f3d0';
       default:
         return '#f3f4f6';
@@ -350,8 +358,6 @@ export default function JobsScreen() {
         return '#1e40af';
       case 'completed':
         return '#065f46';
-      case 'paid':
-        return '#065f46';
       default:
         return '#374151';
     }
@@ -364,9 +370,7 @@ export default function JobsScreen() {
       case 'in_progress':
         return 'In Progress';
       case 'completed':
-        return 'Complete';
-      case 'paid':
-        return 'Paid ✓';
+        return 'Completed ✓';
       default:
         return status;
     }
@@ -442,173 +446,123 @@ export default function JobsScreen() {
                   </Text>
                 </View>
                 
-                {!showMpesaForm && (
+                {!showMpesaForm ? (
                   <View style={styles.paymentMethodSection}>
                     <Text style={styles.paymentMethodLabel}>Select Payment Method</Text>
                     <View style={styles.paymentMethods}>
                       <TouchableOpacity
-                        style={[
-                          styles.paymentMethodOption,
-                          paymentMethod === 'cash' && styles.paymentMethodActive
-                        ]}
-                        onPress={() => setPaymentMethod('cash')}
+                        style={styles.paymentMethodOption}
+                        onPress={() => selectedJob && handleCashPayment(selectedJob)}
+                        disabled={submitting}
                       >
-                        <Ionicons 
-                          name="cash-outline" 
-                          size={24} 
-                          color={paymentMethod === 'cash' ? '#3b82f6' : '#6b7280'} 
-                        />
-                        <Text style={[
-                          styles.paymentMethodText,
-                          paymentMethod === 'cash' && styles.paymentMethodTextActive
-                        ]}>Cash</Text>
+                        <Ionicons name="cash-outline" size={24} color="#10b981" />
+                        <Text style={styles.paymentMethodText}>Cash</Text>
                       </TouchableOpacity>
                       
                       <TouchableOpacity
-                        style={[
-                          styles.paymentMethodOption,
-                          paymentMethod === 'mpesa' && styles.paymentMethodActive
-                        ]}
-                        onPress={() => {
-                          setPaymentMethod('mpesa');
-                          setShowMpesaForm(true);
-                        }}
+                        style={styles.paymentMethodOption}
+                        onPress={() => setShowMpesaForm(true)}
                       >
-                        <Ionicons 
-                          name="phone-portrait-outline" 
-                          size={24} 
-                          color={paymentMethod === 'mpesa' ? '#3b82f6' : '#6b7280'} 
-                        />
-                        <Text style={[
-                          styles.paymentMethodText,
-                          paymentMethod === 'mpesa' && styles.paymentMethodTextActive
-                        ]}>M-Pesa</Text>
+                        <Ionicons name="phone-portrait-outline" size={24} color="#8b5cf6" />
+                        <Text style={styles.paymentMethodText}>M-Pesa</Text>
                       </TouchableOpacity>
                     </View>
                   </View>
-                )}
-                
-                {showMpesaForm && (
+                ) : (
                   <View style={styles.mpesaSection}>
-                    <View style={styles.mpesaOptions}>
-                      <TouchableOpacity
-                        style={styles.backButton}
-                        onPress={() => {
-                          setShowMpesaForm(false);
-                          setPaymentMethod('cash');
-                          setPhoneNumber('');
-                          setTransactionId('');
-                          setStkStatus('');
-                        }}
-                      >
-                        <Ionicons name="arrow-back" size={20} color="#3b82f6" />
-                        <Text style={styles.backButtonText}>Back to payment methods</Text>
-                      </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.backButton}
+                      onPress={() => {
+                        setShowMpesaForm(false);
+                        setPhoneNumber('');
+                        setTransactionId('');
+                        setStkStatus('');
+                      }}
+                    >
+                      <Ionicons name="arrow-back" size={20} color="#3b82f6" />
+                      <Text style={styles.backButtonText}>Back</Text>
+                    </TouchableOpacity>
+                    
+                    <Text style={styles.mpesaTitle}>M-Pesa Payment</Text>
+                    
+                    <View style={styles.mpesaOptionCard}>
+                      <Text style={styles.optionTitle}>STK Push (Prompt on Phone)</Text>
+                      <Text style={styles.optionDescription}>
+                        Customer will receive a prompt on their phone to enter PIN
+                      </Text>
                       
-                      <Text style={styles.mpesaTitle}>M-Pesa Payment</Text>
-                      
-                      <View style={styles.mpesaOptionCard}>
-                        <Text style={styles.optionTitle}>STK Push (Prompt on Phone)</Text>
-                        <Text style={styles.optionDescription}>
-                          Customer will receive a prompt on their phone to enter PIN
-                        </Text>
-                        
-                        <View style={styles.inputGroup}>
-                          <Text style={styles.inputLabel}>Phone Number</Text>
-                          <TextInput
-                            style={styles.input}
-                            placeholder="0712345678"
-                            placeholderTextColor="#9ca3af"
-                            value={phoneNumber}
-                            onChangeText={setPhoneNumber}
-                            keyboardType="phone-pad"
-                            editable={!processingSTK}
-                          />
-                          <Text style={styles.inputHint}>
-                            Enter the customer's M-Pesa registered phone number
-                          </Text>
-                        </View>
-                        
-                        {stkStatus ? (
-                          <View style={styles.stkStatusContainer}>
-                            <ActivityIndicator size="small" color="#3b82f6" />
-                            <Text style={styles.stkStatusText}>{stkStatus}</Text>
-                          </View>
-                        ) : (
-                          <TouchableOpacity
-                            style={styles.stkButton}
-                            onPress={handleSTKPush}
-                            disabled={!phoneNumber.trim() || processingSTK}
-                          >
-                            <Text style={styles.stkButtonText}>Send Payment Request</Text>
-                            <Ionicons name="send-outline" size={18} color="#fff" />
-                          </TouchableOpacity>
-                        )}
+                      <View style={styles.inputGroup}>
+                        <Text style={styles.inputLabel}>Phone Number</Text>
+                        <TextInput
+                          style={styles.input}
+                          placeholder="0712345678"
+                          placeholderTextColor="#9ca3af"
+                          value={phoneNumber}
+                          onChangeText={setPhoneNumber}
+                          keyboardType="phone-pad"
+                          editable={!processingSTK}
+                        />
                       </View>
                       
-                      <View style={styles.divider}>
-                        <View style={styles.dividerLine} />
-                        <Text style={styles.dividerText}>OR</Text>
-                        <View style={styles.dividerLine} />
-                      </View>
-                      
-                      <View style={styles.mpesaOptionCard}>
-                        <Text style={styles.optionTitle}>Manual Entry</Text>
-                        <Text style={styles.optionDescription}>
-                          Enter M-Pesa transaction ID after customer completes payment
-                        </Text>
-                        
-                        <View style={styles.inputGroup}>
-                          <Text style={styles.inputLabel}>Transaction ID / M-Pesa Receipt</Text>
-                          <TextInput
-                            style={styles.input}
-                            placeholder="e.g., QWER12TY"
-                            placeholderTextColor="#9ca3af"
-                            value={transactionId}
-                            onChangeText={setTransactionId}
-                            autoCapitalize="characters"
-                          />
-                          <Text style={styles.inputHint}>
-                            Enter the transaction ID from the M-Pesa message
-                          </Text>
+                      {stkStatus ? (
+                        <View style={styles.stkStatusContainer}>
+                          <ActivityIndicator size="small" color="#3b82f6" />
+                          <Text style={styles.stkStatusText}>{stkStatus}</Text>
                         </View>
-                        
+                      ) : (
                         <TouchableOpacity
-                          style={styles.manualButton}
-                          onPress={handleMpesaManual}
-                          disabled={!transactionId.trim() || submitting}
+                          style={styles.stkButton}
+                          onPress={() => selectedJob && handleSTKPush(selectedJob)}
+                          disabled={!phoneNumber.trim() || processingSTK}
                         >
-                          {submitting ? (
-                            <ActivityIndicator color="#fff" size="small" />
-                          ) : (
-                            <>
-                              <Text style={styles.manualButtonText}>Verify & Complete Payment</Text>
-                              <Ionicons name="checkmark-circle" size={18} color="#fff" />
-                            </>
-                          )}
+                          <Text style={styles.stkButtonText}>Send Payment Request</Text>
+                          <Ionicons name="send-outline" size={18} color="#fff" />
                         </TouchableOpacity>
+                      )}
+                    </View>
+                    
+                    <View style={styles.divider}>
+                      <View style={styles.dividerLine} />
+                      <Text style={styles.dividerText}>OR</Text>
+                      <View style={styles.dividerLine} />
+                    </View>
+                    
+                    <View style={styles.mpesaOptionCard}>
+                      <Text style={styles.optionTitle}>Manual Entry</Text>
+                      <Text style={styles.optionDescription}>
+                        Enter M-Pesa transaction ID after customer completes payment
+                      </Text>
+                      
+                      <View style={styles.inputGroup}>
+                        <Text style={styles.inputLabel}>Transaction ID</Text>
+                        <TextInput
+                          style={styles.input}
+                          placeholder="e.g., QWER12TY"
+                          placeholderTextColor="#9ca3af"
+                          value={transactionId}
+                          onChangeText={setTransactionId}
+                          autoCapitalize="characters"
+                        />
                       </View>
+                      
+                      <TouchableOpacity
+                        style={styles.manualButton}
+                        onPress={() => selectedJob && handleMpesaManual(selectedJob)}
+                        disabled={!transactionId.trim() || submitting}
+                      >
+                        {submitting ? (
+                          <ActivityIndicator color="#fff" size="small" />
+                        ) : (
+                          <>
+                            <Text style={styles.manualButtonText}>Verify & Complete</Text>
+                            <Ionicons name="checkmark-circle" size={18} color="#fff" />
+                          </>
+                        )}
+                      </TouchableOpacity>
                     </View>
                   </View>
                 )}
               </View>
-            )}
-            
-            {!showMpesaForm && paymentMethod === 'cash' && (
-              <TouchableOpacity
-                style={styles.processPaymentButton}
-                onPress={() => processPayment('cash')}
-                disabled={submitting}
-              >
-                {submitting ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <>
-                    <Text style={styles.processPaymentButtonText}>Complete Cash Payment</Text>
-                    <Ionicons name="checkmark-circle" size={20} color="#fff" />
-                  </>
-                )}
-              </TouchableOpacity>
             )}
           </ScrollView>
         </View>
@@ -651,9 +605,6 @@ export default function JobsScreen() {
   );
 
   const renderJobCard = ({ item }: { item: Job }) => {
-    const showActionButton = item.status !== 'completed' && item.status !== 'paid';
-    const buttonText = item.status === 'pending' ? 'Start Job' : 'Complete Job';
-    const buttonAction = item.status === 'pending' ? startJob : completeJob;
     const isAssignedToMe = isStaff && item.assigned_staff === userId;
 
     return (
@@ -698,26 +649,19 @@ export default function JobsScreen() {
           </View>
         </View>
 
-        {showActionButton && (
+        {item.status === 'pending' && (
           <TouchableOpacity
-            style={[
-              styles.actionButton,
-              item.status === 'pending' ? styles.startButton : styles.completeButton
-            ]}
-            onPress={() => buttonAction(item.id)}
+            style={[styles.actionButton, styles.startButton]}
+            onPress={() => startJob(item.id)}
           >
-            <Text style={styles.actionButtonText}>{buttonText}</Text>
-            <Ionicons 
-              name={item.status === 'pending' ? 'play-circle' : 'checkmark-circle'} 
-              size={20} 
-              color="#fff" 
-            />
+            <Text style={styles.actionButtonText}>Start Job</Text>
+            <Ionicons name="play-circle" size={20} color="#fff" />
           </TouchableOpacity>
         )}
 
-        {item.status === 'completed' && (
+        {item.status === 'in_progress' && (
           <TouchableOpacity
-            style={[styles.actionButton, styles.paymentButton]}
+            style={[styles.actionButton, styles.completePayButton]}
             onPress={() => openPaymentModal(item)}
           >
             <Text style={styles.actionButtonText}>Process Payment</Text>
@@ -725,10 +669,10 @@ export default function JobsScreen() {
           </TouchableOpacity>
         )}
 
-        {item.status === 'paid' && (
-          <View style={[styles.actionButton, styles.paidButton]}>
+        {item.status === 'completed' && (
+          <View style={[styles.actionButton, styles.completedButton]}>
             <Ionicons name="checkmark-done-circle" size={20} color="#fff" />
-            <Text style={styles.actionButtonText}>Payment Received</Text>
+            <Text style={styles.actionButtonText}>Completed & Paid</Text>
           </View>
         )}
       </View>
@@ -739,7 +683,6 @@ export default function JobsScreen() {
     { key: 'pending', label: 'Pending', icon: 'time-outline' },
     { key: 'in_progress', label: 'In Progress', icon: 'play-circle-outline' },
     { key: 'completed', label: 'Completed', icon: 'checkmark-circle-outline' },
-    { key: 'paid', label: 'Paid', icon: 'cash-outline' },
   ];
 
   const handleTabChange = async (tabKey: JobStatus) => {
@@ -825,7 +768,7 @@ export default function JobsScreen() {
         contentContainerStyle={styles.listContent}
         ListEmptyComponent={
           <EmptyState
-            title={`No ${activeTab.replace('_', ' ')} jobs`}
+            title={`No ${activeTab} jobs`}
             message="No jobs found. Pull down to refresh or create a new job."
           />
         }
@@ -1026,15 +969,11 @@ const styles = StyleSheet.create({
   startButton: {
     backgroundColor: '#3b82f6',
   },
-  completeButton: {
-    backgroundColor: '#10b981',
-  },
-  paymentButton: {
+  completePayButton: {
     backgroundColor: '#f59e0b',
   },
-  paidButton: {
+  completedButton: {
     backgroundColor: '#10b981',
-    opacity: 0.7,
   },
   actionButtonText: {
     color: '#fff',
@@ -1165,39 +1104,17 @@ const styles = StyleSheet.create({
   paymentMethodOption: {
     flex: 1,
     alignItems: 'center',
-    padding: 12,
+    padding: 16,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: '#e5e7eb',
     backgroundColor: '#fff',
     gap: 8,
   },
-  paymentMethodActive: {
-    borderColor: '#3b82f6',
-    backgroundColor: '#eff6ff',
-  },
   paymentMethodText: {
-    fontSize: 12,
-    fontWeight: '500',
-    color: '#6b7280',
-  },
-  paymentMethodTextActive: {
-    color: '#3b82f6',
-  },
-  processPaymentButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#10b981',
-    padding: 16,
-    margin: 20,
-    borderRadius: 12,
-    gap: 8,
-  },
-  processPaymentButtonText: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '600',
-    color: '#fff',
+    color: '#374151',
   },
   errorContainer: {
     flex: 1,
@@ -1233,15 +1150,11 @@ const styles = StyleSheet.create({
   mpesaSection: {
     marginTop: 16,
   },
-  mpesaOptions: {
-    gap: 16,
-  },
   backButton: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    paddingVertical: 8,
-    alignSelf: 'flex-start',
+    marginBottom: 16,
   },
   backButtonText: {
     fontSize: 14,
@@ -1252,7 +1165,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     color: '#1f2937',
-    marginBottom: 8,
+    marginBottom: 16,
   },
   mpesaOptionCard: {
     backgroundColor: '#f9fafb',
@@ -1260,6 +1173,7 @@ const styles = StyleSheet.create({
     padding: 16,
     borderWidth: 1,
     borderColor: '#e5e7eb',
+    marginBottom: 16,
   },
   optionTitle: {
     fontSize: 16,
@@ -1290,11 +1204,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     backgroundColor: '#fff',
   },
-  inputHint: {
-    fontSize: 11,
-    color: '#9ca3af',
-    marginTop: 4,
-  },
   stkButton: {
     backgroundColor: '#3b82f6',
     flexDirection: 'row',
@@ -1303,7 +1212,6 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingVertical: 12,
     borderRadius: 8,
-    marginTop: 8,
   },
   stkButtonText: {
     fontSize: 14,
@@ -1318,7 +1226,6 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     backgroundColor: '#eff6ff',
     borderRadius: 8,
-    marginTop: 8,
   },
   stkStatusText: {
     fontSize: 13,
@@ -1332,7 +1239,6 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingVertical: 12,
     borderRadius: 8,
-    marginTop: 8,
   },
   manualButtonText: {
     fontSize: 14,

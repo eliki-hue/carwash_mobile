@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Car Wash Manager",
-    "slug": "carwash-mobile",
+    "slug": "carwash-system",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -9,7 +9,6 @@
     "userInterfaceStyle": "automatic",
     "android": {
       "package": "com.eliki.carwash",
-      "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundColor": "#ffffff"
@@ -27,13 +26,19 @@
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
         }
-      ]
+      ],
+      "expo-font",
+      "expo-web-browser"
     ],
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "94596e7a-d603-48d1-867c-815045250065"
+        "projectId": "909b5d35-98ac-48fc-a655-f0cb2c995b46"
       }
-    }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "owner": "kiragueli"
   }
 }

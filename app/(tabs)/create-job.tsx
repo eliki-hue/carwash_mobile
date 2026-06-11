@@ -135,12 +135,20 @@ export default function CreateJob() {
       resetForm();
       
     } catch (error: any) {
-      console.error('Error creating job:', error);
-      if (error.response?.data) {
-        Alert.alert('Error', error.response.data.message || 'Failed to create job');
-      } else {
-        Alert.alert('Error', 'Failed to create job. Please try again.');
-      }
+      
+
+      console.log('FULL ERROR:', error);
+
+      console.log(
+        'DJANGO RESPONSE:',
+        error?.response?.data
+      );
+
+      Alert.alert(
+        'Django Validation Error',
+        JSON.stringify(error?.response?.data, null, 2)
+      );
+
     } finally {
       setSubmitting(false);
     }

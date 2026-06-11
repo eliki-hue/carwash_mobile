@@ -1,5 +1,5 @@
 // src/components/PaymentModal.tsx
-import React, { useState } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -9,13 +9,10 @@ import {
   TextInput,
   ActivityIndicator,
   Alert,
-  KeyboardAvoidingView,
-  Platform,
   ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { paymentService } from '../src/services/payment';
-
+import api from '@/src/services/api';
 interface PaymentModalProps {
   visible: boolean;
   onClose: () => void;
@@ -25,6 +22,8 @@ interface PaymentModalProps {
   plateNumber: string;
   serviceName: string;
   vehicleName: string;
+  onCashPayment: (jobId: number) => Promise<void>;
+  onManualMpesaPayment: (jobId: number, transactionId: string) => Promise<void>;
 }
 
 export const PaymentModal: React.FC<PaymentModalProps> = ({
@@ -36,287 +35,390 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   plateNumber,
   serviceName,
   vehicleName,
+  onCashPayment,
+  onManualMpesaPayment,
 }) => {
   const [step, setStep] = useState<'select' | 'manual' | 'stk'>('select');
   const [processing, setProcessing] = useState(false);
   const [transactionId, setTransactionId] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
+  const [stkStatus, setStkStatus] = useState('');
+  const [processingSTK, setProcessingSTK] = useState(false);
+  
+  const pollingIntervalRef = useRef<number | null>(null);
+  const isMountedRef = useRef(true);
 
-  const resetModal = () => {
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+    };
+  }, []);
+
+  const resetModal = useCallback(() => {
     setStep('select');
+    setProcessing(false);
     setTransactionId('');
     setPhoneNumber('');
-    setProcessing(false);
-  };
+    setStkStatus('');
+    setProcessingSTK(false);
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
+  }, []);
 
-  const handleClose = () => {
+  const handleClose = useCallback(() => {
     resetModal();
     onClose();
-  };
+  }, [resetModal, onClose]);
 
   // Cash Payment
-  const handleCashPayment = async () => {
+  const handleCashPayment = useCallback(async () => {
     setProcessing(true);
     try {
-      await paymentService.processCashPayment(jobId);
+      await onCashPayment(jobId);
       Alert.alert('Success', 'Cash payment recorded successfully!', [
         { text: 'OK', onPress: onSuccess }
       ]);
       handleClose();
     } catch (error: any) {
-      Alert.alert('Error', error.response?.data?.message || 'Payment failed');
+      Alert.alert('Error', error?.message || 'Payment failed');
     } finally {
       setProcessing(false);
     }
-  };
+  }, [jobId, onCashPayment, onSuccess, handleClose]);
 
   // Manual M-Pesa Payment
-  const handleManualMpesa = async () => {
-    if (!transactionId.trim()) {
-      Alert.alert('Error', 'Please enter M-Pesa transaction ID');
+  const handleManualMpesa = useCallback(async () => {
+    const trimmedTransactionId = transactionId.trim();
+    if (!trimmedTransactionId) {
+      Alert.alert('Error', 'Please enter transaction ID');
       return;
     }
 
     setProcessing(true);
     try {
-      await paymentService.processManualMpesaPayment(jobId, transactionId);
+      await onManualMpesaPayment(jobId, trimmedTransactionId);
       Alert.alert('Success', 'M-Pesa payment recorded successfully!', [
         { text: 'OK', onPress: onSuccess }
       ]);
       handleClose();
     } catch (error: any) {
-      Alert.alert('Error', error.response?.data?.message || 'Payment failed');
+      Alert.alert('Error', error?.message || 'Payment failed');
     } finally {
       setProcessing(false);
     }
-  };
+  }, [jobId, transactionId, onManualMpesaPayment, onSuccess, handleClose]);
 
   // STK Push Payment
-  const handleSTKPush = async () => {
-    if (!phoneNumber || phoneNumber.length < 10) {
-      Alert.alert('Error', 'Please enter a valid phone number');
+  const handleSTKPush = useCallback(async () => {
+    let rawPhoneNumber = phoneNumber.replace(/\s/g, '');
+    if (!rawPhoneNumber || rawPhoneNumber.length < 9) {
+      Alert.alert('Error', 'Please enter a valid phone number (minimum 9 digits)');
       return;
     }
 
-    // Format phone number
-    let formattedNumber = phoneNumber.replace(/\s/g, '');
+    // Format phone number to 254XXXXXXXXX format
+    let formattedNumber = rawPhoneNumber;
     if (formattedNumber.startsWith('0')) {
       formattedNumber = '254' + formattedNumber.substring(1);
     } else if (formattedNumber.startsWith('+')) {
       formattedNumber = formattedNumber.substring(1);
+    } else if (formattedNumber.length === 9 && !formattedNumber.startsWith('254')) {
+      formattedNumber = '254' + formattedNumber;
     }
-
-    setProcessing(true);
-    try {
-      await paymentService.initiateSTKPush(jobId, formattedNumber);
-      
-      Alert.alert(
-        'STK Push Sent!',
-        `Check your phone ${phoneNumber} and enter your PIN to complete payment.`,
-        [
-          { 
-            text: 'OK', 
-            onPress: () => {
-              // Start polling for payment status
-              pollPaymentStatus();
-            }
-          }
-        ]
-      );
-    } catch (error: any) {
-      Alert.alert('Error', error.response?.data?.error || 'Failed to initiate payment');
-      setProcessing(false);
-    }
-  };
-
-  const pollPaymentStatus = async () => {
-    let attempts = 0;
-    const maxAttempts = 30; // 30 seconds
     
-    const interval = setInterval(async () => {
-      attempts++;
-      try {
-        const payment = await paymentService.getPaymentByJob(jobId);
-        if (payment && payment.status === 'success') {
-          clearInterval(interval);
-          Alert.alert('Success', 'Payment received successfully!', [
-            { text: 'OK', onPress: onSuccess }
-          ]);
-          handleClose();
-        } else if (payment && payment.status === 'failed') {
-          clearInterval(interval);
-          Alert.alert('Error', 'Payment failed. Please try again.');
-          setProcessing(false);
-        } else if (attempts >= maxAttempts) {
-          clearInterval(interval);
-          Alert.alert('Timeout', 'Payment confirmation taking too long. Please check later.');
-          setProcessing(false);
-        }
-      } catch (error) {
-        console.error('Error checking payment status:', error);
+    // Ensure it starts with 254
+    if (!formattedNumber.startsWith('254')) {
+      formattedNumber = '254' + formattedNumber;
+    }
+
+    console.log('STK Push - Job ID:', jobId);
+    console.log('STK Push - Formatted phone:', formattedNumber);
+
+    setProcessingSTK(true);
+    setStkStatus('Initiating payment...');
+
+    try {
+      // Try the correct endpoint
+      const response = await api.post('/stkpush/', {
+        job_id: jobId,
+        phone_number: formattedNumber,
+        amount: amount,
+      });
+      
+      console.log('STK Push response:', response.data);
+      
+      setStkStatus('Payment request sent. Check your phone...');
+      
+      // Get the checkout request ID from response
+      const checkoutRequestId = response.data.checkout_request_id || 
+                                response.data.CheckoutRequestID || 
+                                response.data.id;
+      
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
       }
-    }, 1000);
-  };
+      
+      // Poll for payment status
+      pollingIntervalRef.current = setInterval(async () => {
+        try {
+          // Try different status endpoints
+          let statusRes;
+          try {
+            statusRes = await api.get(`/stkpush/status/${checkoutRequestId}`);
+          } catch (e) {
+            statusRes = await api.get(`/payments/status/${checkoutRequestId}`);
+          }
+          
+          console.log('Payment status:', statusRes.data);
+          
+          const isCompleted = statusRes.data.status === 'completed' || 
+                             statusRes.data.ResultCode === 0 ||
+                             statusRes.data.success === true;
+          
+          const isFailed = statusRes.data.status === 'failed' || 
+                          statusRes.data.ResultCode === 1032 ||
+                          statusRes.data.success === false;
+          
+          // Check if user cancelled (ResultCode 1032 means user cancelled)
+          const isUserCancelled = statusRes.data.ResultCode === 1032;
+          
+          if (isCompleted) {
+            if (pollingIntervalRef.current) {
+              clearInterval(pollingIntervalRef.current);
+              pollingIntervalRef.current = null;
+            }
+            setStkStatus('Payment successful!');
+            
+            // Record the payment
+            await onManualMpesaPayment(jobId, checkoutRequestId);
+            
+            setTimeout(() => {
+              Alert.alert('Success', 'Payment received successfully!', [
+                { text: 'OK', onPress: onSuccess }
+              ]);
+              handleClose();
+            }, 1500);
+          } else if (isUserCancelled) {
+            if (pollingIntervalRef.current) {
+              clearInterval(pollingIntervalRef.current);
+              pollingIntervalRef.current = null;
+            }
+            // User cancelled - no error, just show info message
+            setStkStatus('Payment cancelled by customer');
+            setProcessingSTK(false);
+            setTimeout(() => {
+              if (isMountedRef.current) {
+                setStkStatus('');
+              }
+            }, 3000);
+          } else if (isFailed) {
+            if (pollingIntervalRef.current) {
+              clearInterval(pollingIntervalRef.current);
+              pollingIntervalRef.current = null;
+            }
+            setStkStatus('Payment failed. Please try again.');
+            setProcessingSTK(false);
+          }
+        } catch (error) {
+          console.error('Error checking payment status:', error);
+        }
+      }, 3000);
+      
+      // Timeout after 60 seconds
+      setTimeout(() => {
+        if (pollingIntervalRef.current) {
+          clearInterval(pollingIntervalRef.current);
+          pollingIntervalRef.current = null;
+          if (processingSTK && isMountedRef.current) {
+            setStkStatus('Payment timeout. Please try again.');
+            setProcessingSTK(false);
+          }
+        }
+      }, 60000);
+      
+    } catch (error: any) {
+      console.error('STK Push error details:', error);
+      
+      let errorMessage = '';
+      
+      // Handle different error scenarios without showing errors for cancellations
+      if (error.response?.data?.error === "Job already has a payment") {
+        errorMessage = 'This job already has a payment recorded. Refreshing...';
+        // Refresh the data
+        onSuccess();
+        setTimeout(() => handleClose(), 2000);
+      } else if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
+        // Timeout error - don't show error, just inform
+        errorMessage = 'Request timeout. Please check payment status later.';
+      } else if (error.response?.status === 404) {
+        // Endpoint not found - try alternative endpoints
+        errorMessage = 'STK Push service unavailable. Please use Manual Entry.';
+      } else if (error.response?.data?.message) {
+        errorMessage = error.response.data.message;
+      } else if (error.response?.data?.error) {
+        errorMessage = error.response.data.error;
+      } else {
+        // Don't show generic errors for user cancellations
+        if (!errorMessage) {
+          setStkStatus('');
+          setProcessingSTK(false);
+          return;
+        }
+      }
+      
+      if (errorMessage) {
+        setStkStatus(errorMessage);
+        setProcessingSTK(false);
+        setTimeout(() => {
+          if (isMountedRef.current) {
+            setStkStatus('');
+          }
+        }, 5000);
+      }
+    }
+  }, [jobId, phoneNumber, amount, onManualMpesaPayment, onSuccess, handleClose]);
 
   const renderSelectMethod = () => (
     <>
-      <View style={styles.jobSummary}>
-        <View style={styles.summaryRow}>
-          <Ionicons name="car" size={16} color="#6b7280" />
-          <Text style={styles.summaryText}>{plateNumber}</Text>
-        </View>
-        <View style={styles.summaryRow}>
-          <Ionicons name="construct" size={16} color="#6b7280" />
-          <Text style={styles.summaryText}>{serviceName}</Text>
-        </View>
-        <View style={styles.summaryRow}>
-          <Ionicons name="car-sport" size={16} color="#6b7280" />
-          <Text style={styles.summaryText}>{vehicleName}</Text>
-        </View>
-        <View style={[styles.summaryRow, styles.amountRow]}>
-          <Ionicons name="cash" size={16} color="#10b981" />
-          <Text style={styles.amountText}>KES {amount.toLocaleString()}</Text>
-        </View>
+      <View style={styles.summaryCard}>
+        <Text style={styles.plate}>{plateNumber}</Text>
+        <Text style={styles.meta}>
+          {serviceName} • {vehicleName}
+        </Text>
+        <Text style={styles.amount}>
+          KES {amount.toLocaleString()}
+        </Text>
       </View>
 
-      <Text style={styles.sectionTitle}>Select Payment Method</Text>
-      
-      {/* Cash Button */}
-      <TouchableOpacity style={styles.methodCard} onPress={handleCashPayment}>
-        <View style={[styles.methodIcon, { backgroundColor: '#10b981' }]}>
-          <Ionicons name="wallet" size={28} color="#fff" />
+      <TouchableOpacity
+        style={styles.paymentOption}
+        onPress={handleCashPayment}
+        disabled={processing}
+      >
+        <Ionicons name="cash-outline" size={24} color="#10b981" />
+        <View style={styles.optionContent}>
+          <Text style={styles.optionTitle}>Cash</Text>
+          <Text style={styles.optionSubtitle}>Receive cash payment</Text>
         </View>
-        <View style={styles.methodInfo}>
-          <Text style={styles.methodName}>Cash</Text>
-          <Text style={styles.methodDesc}>Pay with cash at counter</Text>
-        </View>
-        <Ionicons name="chevron-forward" size={20} color="#cbd5e1" />
       </TouchableOpacity>
 
-      {/* M-Pesa Manual Button */}
-      <TouchableOpacity 
-        style={styles.methodCard} 
+      <TouchableOpacity
+        style={styles.paymentOption}
         onPress={() => setStep('manual')}
+        disabled={processing}
       >
-        <View style={[styles.methodIcon, { backgroundColor: '#3b82f6' }]}>
-          <Ionicons name="create-outline" size={28} color="#fff" />
+        <Ionicons name="document-text-outline" size={24} color="#3b82f6" />
+        <View style={styles.optionContent}>
+          <Text style={styles.optionTitle}>Manual M-Pesa</Text>
+          <Text style={styles.optionSubtitle}>Enter transaction code</Text>
         </View>
-        <View style={styles.methodInfo}>
-          <Text style={styles.methodName}>M-Pesa Manual</Text>
-          <Text style={styles.methodDesc}>Enter transaction ID manually</Text>
-        </View>
-        <Ionicons name="chevron-forward" size={20} color="#cbd5e1" />
       </TouchableOpacity>
 
-      {/* M-Pesa STK Push Button */}
-      <TouchableOpacity 
-        style={styles.methodCard} 
+      <TouchableOpacity
+        style={styles.paymentOption}
         onPress={() => setStep('stk')}
+        disabled={processing}
       >
-        <View style={[styles.methodIcon, { backgroundColor: '#8b5cf6' }]}>
-          <Ionicons name="phone-portrait" size={28} color="#fff" />
+        <Ionicons name="phone-portrait-outline" size={24} color="#8b5cf6" />
+        <View style={styles.optionContent}>
+          <Text style={styles.optionTitle}>STK Push</Text>
+          <Text style={styles.optionSubtitle}>Send prompt to customer phone</Text>
         </View>
-        <View style={styles.methodInfo}>
-          <Text style={styles.methodName}>M-Pesa STK Push</Text>
-          <Text style={styles.methodDesc}>Customer receives prompt on phone</Text>
-        </View>
-        <Ionicons name="chevron-forward" size={20} color="#cbd5e1" />
       </TouchableOpacity>
     </>
   );
 
   const renderManualMpesa = () => (
     <>
-      <TouchableOpacity style={styles.backButton} onPress={() => setStep('select')}>
-        <Ionicons name="arrow-back" size={24} color="#3b82f6" />
+      <TouchableOpacity
+        style={styles.backButton}
+        onPress={() => setStep('select')}
+      >
+        <Ionicons name="arrow-back" size={20} color="#3b82f6" />
         <Text style={styles.backText}>Back</Text>
       </TouchableOpacity>
 
-      <View style={styles.formCard}>
-        <Ionicons name="receipt-outline" size={48} color="#3b82f6" style={styles.formIcon} />
-        <Text style={styles.formTitle}>Enter M-Pesa Transaction ID</Text>
-        <Text style={styles.formSubtitle}>
-          Ask customer for the transaction ID from their M-Pesa message
-        </Text>
+      <Text style={styles.sectionTitle}>Enter Transaction ID</Text>
 
-        <View style={styles.inputContainer}>
-          <Ionicons name="document-text-outline" size={20} color="#9ca3af" />
-          <TextInput
-            style={styles.input}
-            placeholder="e.g., QWERTY123UI"
-            placeholderTextColor="#9ca3af"
-            value={transactionId}
-            onChangeText={setTransactionId}
-            autoCapitalize="characters"
-            autoCorrect={false}
-          />
-        </View>
+      <TextInput
+        style={styles.input}
+        placeholder="e.g QWE123ABC"
+        placeholderTextColor="#9ca3af"
+        value={transactionId}
+        onChangeText={setTransactionId}
+        autoCapitalize="characters"
+        autoCorrect={false}
+        returnKeyType="done"
+        editable={!processing}
+      />
 
-        <TouchableOpacity
-          style={[styles.confirmButton, !transactionId && styles.disabledButton]}
-          onPress={handleManualMpesa}
-          disabled={!transactionId || processing}
-        >
-          {processing ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <>
-              <Text style={styles.confirmButtonText}>Confirm Payment</Text>
-              <Ionicons name="checkmark-circle" size={20} color="#fff" />
-            </>
-          )}
-        </TouchableOpacity>
-      </View>
+      <TouchableOpacity
+        style={styles.confirmButton}
+        onPress={handleManualMpesa}
+        disabled={processing}
+      >
+        {processing ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <Text style={styles.confirmButtonText}>Confirm Payment</Text>
+        )}
+      </TouchableOpacity>
     </>
   );
 
   const renderSTKPush = () => (
     <>
-      <TouchableOpacity style={styles.backButton} onPress={() => setStep('select')}>
-        <Ionicons name="arrow-back" size={24} color="#3b82f6" />
+      <TouchableOpacity
+        style={styles.backButton}
+        onPress={() => setStep('select')}
+      >
+        <Ionicons name="arrow-back" size={20} color="#8b5cf6" />
         <Text style={styles.backText}>Back</Text>
       </TouchableOpacity>
 
-      <View style={styles.formCard}>
-        <Ionicons name="phone-portrait-outline" size={48} color="#8b5cf6" style={styles.formIcon} />
-        <Text style={styles.formTitle}>M-Pesa STK Push</Text>
-        <Text style={styles.formSubtitle}>
-          Customer will receive a prompt on their phone to complete payment
-        </Text>
+      <Text style={styles.sectionTitle}>Customer Phone Number</Text>
 
-        <View style={styles.phoneContainer}>
-          <View style={styles.countryCode}>
-            <Text style={styles.countryCodeText}>+254</Text>
-          </View>
-          <TextInput
-            style={styles.phoneInput}
-            placeholder="712345678"
-            placeholderTextColor="#9ca3af"
-            value={phoneNumber}
-            onChangeText={setPhoneNumber}
-            keyboardType="phone-pad"
-          />
+      <View style={styles.phoneContainer}>
+        <View style={styles.countryCode}>
+          <Text style={styles.countryCodeText}>+254</Text>
         </View>
+        <TextInput
+          style={styles.phoneInput}
+          placeholder="712345678"
+          placeholderTextColor="#9ca3af"
+          keyboardType="numeric"
+          returnKeyType="done"
+          value={phoneNumber}
+          onChangeText={(text) => setPhoneNumber(text.replace(/[^0-9]/g, ''))}
+          editable={!processingSTK}
+        />
+      </View>
 
+      {stkStatus ? (
+        <View style={styles.stkStatusContainer}>
+          <ActivityIndicator size="small" color="#8b5cf6" />
+          <Text style={styles.stkStatusText}>{stkStatus}</Text>
+        </View>
+      ) : (
         <TouchableOpacity
-          style={[styles.stkButton, !phoneNumber && styles.disabledButton]}
+          style={styles.stkButton}
           onPress={handleSTKPush}
-          disabled={!phoneNumber || processing}
+          disabled={!phoneNumber || phoneNumber.length < 9 || processingSTK}
         >
-          {processing ? (
+          {processingSTK ? (
             <ActivityIndicator color="#fff" />
           ) : (
-            <>
-              <Ionicons name="send-outline" size={20} color="#fff" />
-              <Text style={styles.confirmButtonText}>Send STK Push</Text>
-            </>
+            <Text style={styles.confirmButtonText}>Send STK Push</Text>
           )}
         </TouchableOpacity>
-
-        <Text style={styles.stkHint}>
-          Customer must have sufficient balance and enter their PIN to complete payment
-        </Text>
-      </View>
+      )}
     </>
   );
 
@@ -324,22 +426,20 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     <Modal
       visible={visible}
       animationType="slide"
-      transparent={true}
+      transparent
       onRequestClose={handleClose}
     >
-      <KeyboardAvoidingView
-        style={styles.modalOverlay}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      >
-        <View style={styles.modalContent}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Process Payment</Text>
-            <TouchableOpacity onPress={handleClose} style={styles.closeButton}>
+      <View style={styles.overlay}>
+        <View style={styles.modalContainer}>
+          <View style={styles.header}>
+            <Text style={styles.title}>Payment</Text>
+            <TouchableOpacity onPress={handleClose} disabled={processing || processingSTK}>
               <Ionicons name="close" size={24} color="#6b7280" />
             </TouchableOpacity>
           </View>
 
-          <ScrollView 
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
             contentContainerStyle={styles.scrollContent}
           >
@@ -348,24 +448,25 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
             {step === 'stk' && renderSTKPush()}
           </ScrollView>
         </View>
-      </KeyboardAvoidingView>
+      </View>
     </Modal>
   );
 };
 
 const styles = StyleSheet.create({
-  modalOverlay: {
+  overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'flex-end',
   },
-  modalContent: {
+  modalContainer: {
     backgroundColor: '#fff',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     maxHeight: '90%',
+    paddingBottom: 24,
   },
-  modalHeader: {
+  header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -373,189 +474,145 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#f3f4f6',
   },
-  modalTitle: {
-    fontSize: 20,
+  title: {
+    fontSize: 22,
     fontWeight: '700',
-    color: '#1f2937',
-  },
-  closeButton: {
-    padding: 4,
+    color: '#111827',
   },
   scrollContent: {
     padding: 20,
   },
-  jobSummary: {
+  summaryCard: {
     backgroundColor: '#f9fafb',
-    borderRadius: 12,
     padding: 16,
-    marginBottom: 24,
-    gap: 8,
+    borderRadius: 16,
+    marginBottom: 20,
   },
-  summaryRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  plate: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#111827',
   },
-  summaryText: {
+  meta: {
+    marginTop: 6,
+    color: '#6b7280',
     fontSize: 14,
-    color: '#4b5563',
   },
-  amountRow: {
-    marginTop: 4,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#e5e7eb',
-  },
-  amountText: {
-    fontSize: 18,
+  amount: {
+    marginTop: 12,
+    fontSize: 24,
     fontWeight: '700',
     color: '#10b981',
   },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#374151',
-    marginBottom: 12,
-  },
-  methodCard: {
+  paymentOption: {
     flexDirection: 'row',
     alignItems: 'center',
+    padding: 18,
     backgroundColor: '#fff',
+    borderRadius: 16,
+    marginBottom: 14,
     borderWidth: 1,
-    borderColor: '#e5e7eb',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-    gap: 12,
+    borderColor: '#f3f4f6',
   },
-  methodIcon: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  methodInfo: {
+  optionContent: {
+    marginLeft: 14,
     flex: 1,
   },
-  methodName: {
+  optionTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#1f2937',
-    marginBottom: 2,
+    color: '#111827',
   },
-  methodDesc: {
-    fontSize: 12,
+  optionSubtitle: {
+    marginTop: 4,
     color: '#6b7280',
+    fontSize: 13,
   },
   backButton: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 20,
-    gap: 8,
   },
   backText: {
-    fontSize: 16,
+    marginLeft: 6,
     color: '#3b82f6',
-    fontWeight: '500',
-  },
-  formCard: {
-    alignItems: 'center',
-  },
-  formIcon: {
-    marginBottom: 16,
-  },
-  formTitle: {
-    fontSize: 18,
     fontWeight: '600',
-    color: '#1f2937',
-    marginBottom: 8,
   },
-  formSubtitle: {
-    fontSize: 14,
-    color: '#6b7280',
-    textAlign: 'center',
-    marginBottom: 24,
-  },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    backgroundColor: '#fff',
-    marginBottom: 24,
-    height: 52,
-    gap: 12,
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 14,
   },
   input: {
-    flex: 1,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     fontSize: 16,
-    color: '#1f2937',
+    color: '#111827',
+    marginBottom: 20,
   },
   phoneContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    borderRadius: 12,
-    backgroundColor: '#fff',
-    marginBottom: 24,
-    height: 52,
-    overflow: 'hidden',
+    marginBottom: 20,
   },
   countryCode: {
     backgroundColor: '#f3f4f6',
-    paddingHorizontal: 16,
-    height: '100%',
-    justifyContent: 'center',
-    borderRightWidth: 1,
-    borderRightColor: '#e5e7eb',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    borderTopLeftRadius: 14,
+    borderBottomLeftRadius: 14,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
   },
   countryCodeText: {
     fontSize: 16,
-    fontWeight: '500',
-    color: '#1f2937',
+    fontWeight: '600',
+    color: '#111827',
   },
   phoneInput: {
     flex: 1,
+    borderWidth: 1,
+    borderLeftWidth: 0,
+    borderColor: '#d1d5db',
+    borderTopRightRadius: 14,
+    borderBottomRightRadius: 14,
     paddingHorizontal: 16,
+    paddingVertical: 14,
     fontSize: 16,
-    color: '#1f2937',
+    color: '#111827',
   },
   confirmButton: {
-    flexDirection: 'row',
-    backgroundColor: '#10b981',
-    borderRadius: 12,
-    paddingVertical: 14,
+    backgroundColor: '#3b82f6',
+    borderRadius: 14,
+    paddingVertical: 16,
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    width: '100%',
   },
   stkButton: {
-    flexDirection: 'row',
     backgroundColor: '#8b5cf6',
-    borderRadius: 12,
-    paddingVertical: 14,
+    borderRadius: 14,
+    paddingVertical: 16,
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    width: '100%',
   },
   confirmButtonText: {
     color: '#fff',
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '700',
   },
-  disabledButton: {
-    opacity: 0.5,
+  stkStatusContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 16,
+    backgroundColor: '#f3f4f6',
+    borderRadius: 14,
   },
-  stkHint: {
-    fontSize: 12,
-    color: '#9ca3af',
-    textAlign: 'center',
-    marginTop: 16,
+  stkStatusText: {
+    fontSize: 14,
+    color: '#8b5cf6',
   },
 });
