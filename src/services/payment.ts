@@ -17,7 +17,7 @@ export const paymentService = {
     const response = await api.post('/payments/', {
       job: jobId,
       method: 'mpesa_manual',
-      transaction_id: transactionId,
+      mpesa_receipt: transactionId,
     });
     return response.data;
   },

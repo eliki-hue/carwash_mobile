@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import api from '@/src/services/api';
+
 interface PaymentModalProps {
   visible: boolean;
   onClose: () => void;
@@ -44,6 +45,9 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   const [phoneNumber, setPhoneNumber] = useState('');
   const [stkStatus, setStkStatus] = useState('');
   const [processingSTK, setProcessingSTK] = useState(false);
+  const [paymentFailed, setPaymentFailed] = useState(false);
+  const [canRetry, setCanRetry] = useState(false);
+  const [checkoutRequestId, setCheckoutRequestId] = useState<string | null>(null);
   
   const pollingIntervalRef = useRef<number | null>(null);
   const isMountedRef = useRef(true);
@@ -66,6 +70,9 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     setPhoneNumber('');
     setStkStatus('');
     setProcessingSTK(false);
+    setPaymentFailed(false);
+    setCanRetry(false);
+    setCheckoutRequestId(null);
     if (pollingIntervalRef.current) {
       clearInterval(pollingIntervalRef.current);
       pollingIntervalRef.current = null;
@@ -115,6 +122,94 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     }
   }, [jobId, transactionId, onManualMpesaPayment, onSuccess, handleClose]);
 
+  // Retry STK Push using backend endpoint
+  const handleRetrySTK = useCallback(async () => {
+    setProcessingSTK(true);
+    setStkStatus('Retrying payment request...');
+    setPaymentFailed(false);
+    
+    try {
+      const response = await api.post('/payments/retry_stk/', {
+        job: jobId,
+      });
+      
+      console.log('Retry STK response:', response.data);
+      
+      const newCheckoutRequestId = response.data.checkout_request_id;
+      setCheckoutRequestId(newCheckoutRequestId);
+      setStkStatus('Payment request sent. Waiting for customer to complete payment...');
+      
+      // Start polling for status
+      startPolling(newCheckoutRequestId);
+      
+    } catch (error: any) {
+      console.error('Retry STK error:', error.response?.data || error);
+      setStkStatus(error.response?.data?.error || 'Failed to retry payment. Please use manual entry.');
+      setProcessingSTK(false);
+      setPaymentFailed(true);
+    }
+  }, [jobId]);
+
+  // Start polling for payment status
+  const startPolling = useCallback((checkoutId: string) => {
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
+    
+    let attempts = 0;
+    const maxAttempts = 60; // 60 attempts = 120 seconds total
+    
+    pollingIntervalRef.current = setInterval(async () => {
+      attempts++;
+      try {
+        const statusRes = await api.get(`/payments/status/${checkoutId}/`);
+        console.log('Payment status check:', statusRes.data);
+        
+        if (statusRes.data.status === 'success') {
+          if (pollingIntervalRef.current) {
+            clearInterval(pollingIntervalRef.current);
+            pollingIntervalRef.current = null;
+          }
+          
+          setStkStatus('Payment successful! Updating...');
+          onSuccess();
+          
+          setTimeout(() => {
+            Alert.alert('Success', 'Payment received successfully!', [
+              { text: 'OK', onPress: () => handleClose() }
+            ]);
+          }, 1500);
+          
+        } else if (statusRes.data.status === 'failed' || 
+                   statusRes.data.status === 'cancelled' || 
+                   statusRes.data.status === 'expired') {
+          if (pollingIntervalRef.current) {
+            clearInterval(pollingIntervalRef.current);
+            pollingIntervalRef.current = null;
+          }
+          setPaymentFailed(true);
+          setCanRetry(true);
+          setStkStatus(`Payment ${statusRes.data.status}. Customer did not complete the transaction.`);
+          setProcessingSTK(false);
+          
+        } else if (attempts >= maxAttempts) {
+          if (pollingIntervalRef.current) {
+            clearInterval(pollingIntervalRef.current);
+            pollingIntervalRef.current = null;
+          }
+          setPaymentFailed(true);
+          setCanRetry(true);
+          setStkStatus('Payment timeout. Customer did not complete the transaction within the time limit.');
+          setProcessingSTK(false);
+        }
+        
+      } catch (error) {
+        console.error('Error checking payment status:', error);
+      }
+    }, 2000);
+  }, [onSuccess, handleClose]);
+
   // STK Push Payment
   const handleSTKPush = useCallback(async () => {
     let rawPhoneNumber = phoneNumber.replace(/\s/g, '');
@@ -133,157 +228,66 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
       formattedNumber = '254' + formattedNumber;
     }
     
-    // Ensure it starts with 254
     if (!formattedNumber.startsWith('254')) {
       formattedNumber = '254' + formattedNumber;
     }
 
-    console.log('STK Push - Job ID:', jobId);
-    console.log('STK Push - Formatted phone:', formattedNumber);
-
     setProcessingSTK(true);
     setStkStatus('Initiating payment...');
+    setPaymentFailed(false);
+    setCanRetry(false);
 
     try {
-      // Try the correct endpoint
-      const response = await api.post('/stkpush/', {
-        job_id: jobId,
+      // Ensure job is in_progress
+      try {
+        const jobResponse = await api.get(`/jobs/${jobId}/`);
+        if (jobResponse.data.status !== 'in_progress' && jobResponse.data.status !== 'completed') {
+          await api.patch(`/jobs/${jobId}/`, {
+            status: 'in_progress'
+          });
+        }
+      } catch (err) {
+        console.log('Error checking job status:', err);
+      }
+      
+      const response = await api.post('/payments/mpesa_stkpush/', {
+        job: jobId,
         phone_number: formattedNumber,
-        amount: amount,
       });
       
       console.log('STK Push response:', response.data);
       
-      setStkStatus('Payment request sent. Check your phone...');
+      const newCheckoutRequestId = response.data.checkout_request_id;
+      setCheckoutRequestId(newCheckoutRequestId);
+      setStkStatus('Payment request sent. Waiting for customer to complete payment...');
       
-      // Get the checkout request ID from response
-      const checkoutRequestId = response.data.checkout_request_id || 
-                                response.data.CheckoutRequestID || 
-                                response.data.id;
-      
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-      }
-      
-      // Poll for payment status
-      pollingIntervalRef.current = setInterval(async () => {
-        try {
-          // Try different status endpoints
-          let statusRes;
-          try {
-            statusRes = await api.get(`/stkpush/status/${checkoutRequestId}`);
-          } catch (e) {
-            statusRes = await api.get(`/payments/status/${checkoutRequestId}`);
-          }
-          
-          console.log('Payment status:', statusRes.data);
-          
-          const isCompleted = statusRes.data.status === 'completed' || 
-                             statusRes.data.ResultCode === 0 ||
-                             statusRes.data.success === true;
-          
-          const isFailed = statusRes.data.status === 'failed' || 
-                          statusRes.data.ResultCode === 1032 ||
-                          statusRes.data.success === false;
-          
-          // Check if user cancelled (ResultCode 1032 means user cancelled)
-          const isUserCancelled = statusRes.data.ResultCode === 1032;
-          
-          if (isCompleted) {
-            if (pollingIntervalRef.current) {
-              clearInterval(pollingIntervalRef.current);
-              pollingIntervalRef.current = null;
-            }
-            setStkStatus('Payment successful!');
-            
-            // Record the payment
-            await onManualMpesaPayment(jobId, checkoutRequestId);
-            
-            setTimeout(() => {
-              Alert.alert('Success', 'Payment received successfully!', [
-                { text: 'OK', onPress: onSuccess }
-              ]);
-              handleClose();
-            }, 1500);
-          } else if (isUserCancelled) {
-            if (pollingIntervalRef.current) {
-              clearInterval(pollingIntervalRef.current);
-              pollingIntervalRef.current = null;
-            }
-            // User cancelled - no error, just show info message
-            setStkStatus('Payment cancelled by customer');
-            setProcessingSTK(false);
-            setTimeout(() => {
-              if (isMountedRef.current) {
-                setStkStatus('');
-              }
-            }, 3000);
-          } else if (isFailed) {
-            if (pollingIntervalRef.current) {
-              clearInterval(pollingIntervalRef.current);
-              pollingIntervalRef.current = null;
-            }
-            setStkStatus('Payment failed. Please try again.');
-            setProcessingSTK(false);
-          }
-        } catch (error) {
-          console.error('Error checking payment status:', error);
-        }
-      }, 3000);
-      
-      // Timeout after 60 seconds
-      setTimeout(() => {
-        if (pollingIntervalRef.current) {
-          clearInterval(pollingIntervalRef.current);
-          pollingIntervalRef.current = null;
-          if (processingSTK && isMountedRef.current) {
-            setStkStatus('Payment timeout. Please try again.');
-            setProcessingSTK(false);
-          }
-        }
-      }, 60000);
+      // Start polling for status
+      startPolling(newCheckoutRequestId);
       
     } catch (error: any) {
-      console.error('STK Push error details:', error);
+      console.error('STK Push error:', error.response?.data || error);
       
       let errorMessage = '';
-      
-      // Handle different error scenarios without showing errors for cancellations
       if (error.response?.data?.error === "Job already has a payment") {
-        errorMessage = 'This job already has a payment recorded. Refreshing...';
-        // Refresh the data
-        onSuccess();
-        setTimeout(() => handleClose(), 2000);
-      } else if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
-        // Timeout error - don't show error, just inform
-        errorMessage = 'Request timeout. Please check payment status later.';
-      } else if (error.response?.status === 404) {
-        // Endpoint not found - try alternative endpoints
-        errorMessage = 'STK Push service unavailable. Please use Manual Entry.';
-      } else if (error.response?.data?.message) {
-        errorMessage = error.response.data.message;
+        errorMessage = 'A payment is already being processed for this job.';
+        setCanRetry(true);
+      } else if (error.response?.data?.error === "Job must be in progress") {
+        errorMessage = 'Job must be in progress to process payment. Please start the job first.';
       } else if (error.response?.data?.error) {
         errorMessage = error.response.data.error;
+        setCanRetry(true);
+      } else if (error.response?.data?.message) {
+        errorMessage = error.response.data.message;
+        setCanRetry(true);
       } else {
-        // Don't show generic errors for user cancellations
-        if (!errorMessage) {
-          setStkStatus('');
-          setProcessingSTK(false);
-          return;
-        }
+        errorMessage = 'Failed to send STK Push. Please try manual entry.';
       }
       
-      if (errorMessage) {
-        setStkStatus(errorMessage);
-        setProcessingSTK(false);
-        setTimeout(() => {
-          if (isMountedRef.current) {
-            setStkStatus('');
-          }
-        }, 5000);
-      }
+      setStkStatus(errorMessage);
+      setProcessingSTK(false);
+      setPaymentFailed(true);
     }
-  }, [jobId, phoneNumber, amount, onManualMpesaPayment, onSuccess, handleClose]);
+  }, [jobId, phoneNumber, startPolling]);
 
   const renderSelectMethod = () => (
     <>
@@ -293,7 +297,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
           {serviceName} • {vehicleName}
         </Text>
         <Text style={styles.amount}>
-          KES {amount.toLocaleString()}
+          KES {(amount ?? 0).toLocaleString()}
         </Text>
       </View>
 
@@ -419,6 +423,30 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
           )}
         </TouchableOpacity>
       )}
+      
+      {/* Show retry button if payment failed and retry is available */}
+      {paymentFailed && canRetry && (
+        <TouchableOpacity
+          style={styles.retryButton}
+          onPress={handleRetrySTK}
+        >
+          <Ionicons name="refresh-outline" size={20} color="#3b82f6" />
+          <Text style={styles.retryButtonText}>Retry STK Push</Text>
+        </TouchableOpacity>
+      )}
+      
+      <View style={styles.divider}>
+        <View style={styles.dividerLine} />
+        <Text style={styles.dividerText}>OR</Text>
+        <View style={styles.dividerLine} />
+      </View>
+      
+      <TouchableOpacity
+        style={styles.manualFallbackButton}
+        onPress={() => setStep('manual')}
+      >
+        <Text style={styles.manualFallbackText}>Enter Transaction ID Manually</Text>
+      </TouchableOpacity>
     </>
   );
 
@@ -614,5 +642,47 @@ const styles = StyleSheet.create({
   stkStatusText: {
     fontSize: 14,
     color: '#8b5cf6',
+  },
+  divider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 20,
+    gap: 12,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#e5e7eb',
+  },
+  dividerText: {
+    fontSize: 12,
+    color: '#9ca3af',
+  },
+  manualFallbackButton: {
+    backgroundColor: '#f3f4f6',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  manualFallbackText: {
+    color: '#6b7280',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  retryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#eff6ff',
+    borderRadius: 14,
+    paddingVertical: 12,
+    marginTop: 12,
+    gap: 8,
+  },
+  retryButtonText: {
+    color: '#3b82f6',
+    fontSize: 14,
+    fontWeight: '500',
   },
 });

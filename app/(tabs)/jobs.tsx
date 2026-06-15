@@ -20,6 +20,7 @@ import { Ionicons } from '@expo/vector-icons';
 import api from '../../src/services/api';
 import { LoadingSpinner } from '../../components/LoadingSpinner';
 import { EmptyState } from '../../components/EmptyState';
+import { PaymentModal } from '../../components/PaymentModal';
 
 interface Service {
   id: number;
@@ -90,7 +91,9 @@ export default function JobsScreen() {
       }
     }, [activeTab, authLoading, role])
   );
-
+  useEffect(() => {
+    console.log("Phone changed:", phoneNumber);
+  }, [phoneNumber]);
   const refreshAllData = async () => {
     await fetchAllJobCounts();
     await fetchJobs(activeTab);
@@ -189,8 +192,8 @@ export default function JobsScreen() {
         processed_by: userId,
       };
       
-      if (methodType === 'mpesa_manual' && details?.transaction_id) {
-        paymentData.transaction_id = details.transaction_id;
+      if (methodType === 'mpesa_manual' && details?.mpesa_receipt) {
+        paymentData.mpesa_receipt = details.mpesa_receipt;
       }
       
       if (methodType === 'mpesa_stk' && details?.checkout_request_id) {
@@ -241,19 +244,37 @@ export default function JobsScreen() {
     }
   };
 
-  const handleCashPayment = (job: Job) => {
-    processPayment(job, 'cash');
+  const handleCashPayment = async (jobId: number) => {
+    const job = jobs.find(j => j.id === jobId);
+
+    if (!job) {
+      Alert.alert('Error', 'Job not found');
+      return;
+    }
+
+    await processPayment(job, 'cash');
   };
 
-  const handleMpesaManual = (job: Job) => {
+  const handleManualMpesaPayment = async (
+    jobId: number,
+    transactionId: string
+  ) => {
+    const job = jobs.find(j => j.id === jobId);
+
+    if (!job) {
+      Alert.alert('Error', 'Job not found');
+      return;
+    }
+
     if (!transactionId.trim()) {
       Alert.alert('Error', 'Please enter transaction ID');
       return;
     }
-    processPayment(job, 'mpesa_manual', { transaction_id: transactionId });
-    setTransactionId('');
-  };
 
+    await processPayment(job, 'mpesa_manual', {
+      mpesa_receipt: transactionId,
+    });
+  };
   const handleSTKPush = async (job: Job) => {
     if (!phoneNumber.trim()) {
       Alert.alert('Error', 'Please enter phone number');
@@ -396,180 +417,7 @@ export default function JobsScreen() {
     setShowPaymentModal(true);
   };
 
-  const PaymentModal = () => (
-    <Modal
-      visible={showPaymentModal}
-      animationType="slide"
-      transparent={true}
-      onRequestClose={() => {
-        setShowPaymentModal(false);
-        setShowMpesaForm(false);
-        setPhoneNumber('');
-        setTransactionId('');
-        setProcessingSTK(false);
-        setStkStatus('');
-      }}
-    >
-      <View style={styles.modalOverlay}>
-        <View style={styles.paymentModalContent}>
-          <View style={styles.paymentModalHeader}>
-            <Text style={styles.paymentModalTitle}>Process Payment</Text>
-            <TouchableOpacity onPress={() => {
-              setShowPaymentModal(false);
-              setShowMpesaForm(false);
-              setPhoneNumber('');
-              setTransactionId('');
-              setProcessingSTK(false);
-              setStkStatus('');
-            }}>
-              <Ionicons name="close" size={24} color="#6b7280" />
-            </TouchableOpacity>
-          </View>
-          
-          <ScrollView showsVerticalScrollIndicator={false}>
-            {selectedJob && (
-              <View style={styles.paymentDetails}>
-                <View style={styles.paymentDetailRow}>
-                  <Text style={styles.paymentDetailLabel}>Plate Number:</Text>
-                  <Text style={styles.paymentDetailValue}>{selectedJob.plate_number}</Text>
-                </View>
-                <View style={styles.paymentDetailRow}>
-                  <Text style={styles.paymentDetailLabel}>Service:</Text>
-                  <Text style={styles.paymentDetailValue}>
-                    {getServiceName(selectedJob.service)}
-                  </Text>
-                </View>
-                <View style={styles.paymentDetailRow}>
-                  <Text style={styles.paymentDetailLabel}>Amount:</Text>
-                  <Text style={styles.paymentAmount}>
-                    KES {parseFloat(selectedJob.price).toLocaleString()}
-                  </Text>
-                </View>
-                
-                {!showMpesaForm ? (
-                  <View style={styles.paymentMethodSection}>
-                    <Text style={styles.paymentMethodLabel}>Select Payment Method</Text>
-                    <View style={styles.paymentMethods}>
-                      <TouchableOpacity
-                        style={styles.paymentMethodOption}
-                        onPress={() => selectedJob && handleCashPayment(selectedJob)}
-                        disabled={submitting}
-                      >
-                        <Ionicons name="cash-outline" size={24} color="#10b981" />
-                        <Text style={styles.paymentMethodText}>Cash</Text>
-                      </TouchableOpacity>
-                      
-                      <TouchableOpacity
-                        style={styles.paymentMethodOption}
-                        onPress={() => setShowMpesaForm(true)}
-                      >
-                        <Ionicons name="phone-portrait-outline" size={24} color="#8b5cf6" />
-                        <Text style={styles.paymentMethodText}>M-Pesa</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                ) : (
-                  <View style={styles.mpesaSection}>
-                    <TouchableOpacity
-                      style={styles.backButton}
-                      onPress={() => {
-                        setShowMpesaForm(false);
-                        setPhoneNumber('');
-                        setTransactionId('');
-                        setStkStatus('');
-                      }}
-                    >
-                      <Ionicons name="arrow-back" size={20} color="#3b82f6" />
-                      <Text style={styles.backButtonText}>Back</Text>
-                    </TouchableOpacity>
-                    
-                    <Text style={styles.mpesaTitle}>M-Pesa Payment</Text>
-                    
-                    <View style={styles.mpesaOptionCard}>
-                      <Text style={styles.optionTitle}>STK Push (Prompt on Phone)</Text>
-                      <Text style={styles.optionDescription}>
-                        Customer will receive a prompt on their phone to enter PIN
-                      </Text>
-                      
-                      <View style={styles.inputGroup}>
-                        <Text style={styles.inputLabel}>Phone Number</Text>
-                        <TextInput
-                          style={styles.input}
-                          placeholder="0712345678"
-                          placeholderTextColor="#9ca3af"
-                          value={phoneNumber}
-                          onChangeText={setPhoneNumber}
-                          keyboardType="phone-pad"
-                          editable={!processingSTK}
-                        />
-                      </View>
-                      
-                      {stkStatus ? (
-                        <View style={styles.stkStatusContainer}>
-                          <ActivityIndicator size="small" color="#3b82f6" />
-                          <Text style={styles.stkStatusText}>{stkStatus}</Text>
-                        </View>
-                      ) : (
-                        <TouchableOpacity
-                          style={styles.stkButton}
-                          onPress={() => selectedJob && handleSTKPush(selectedJob)}
-                          disabled={!phoneNumber.trim() || processingSTK}
-                        >
-                          <Text style={styles.stkButtonText}>Send Payment Request</Text>
-                          <Ionicons name="send-outline" size={18} color="#fff" />
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                    
-                    <View style={styles.divider}>
-                      <View style={styles.dividerLine} />
-                      <Text style={styles.dividerText}>OR</Text>
-                      <View style={styles.dividerLine} />
-                    </View>
-                    
-                    <View style={styles.mpesaOptionCard}>
-                      <Text style={styles.optionTitle}>Manual Entry</Text>
-                      <Text style={styles.optionDescription}>
-                        Enter M-Pesa transaction ID after customer completes payment
-                      </Text>
-                      
-                      <View style={styles.inputGroup}>
-                        <Text style={styles.inputLabel}>Transaction ID</Text>
-                        <TextInput
-                          style={styles.input}
-                          placeholder="e.g., QWER12TY"
-                          placeholderTextColor="#9ca3af"
-                          value={transactionId}
-                          onChangeText={setTransactionId}
-                          autoCapitalize="characters"
-                        />
-                      </View>
-                      
-                      <TouchableOpacity
-                        style={styles.manualButton}
-                        onPress={() => selectedJob && handleMpesaManual(selectedJob)}
-                        disabled={!transactionId.trim() || submitting}
-                      >
-                        {submitting ? (
-                          <ActivityIndicator color="#fff" size="small" />
-                        ) : (
-                          <>
-                            <Text style={styles.manualButtonText}>Verify & Complete</Text>
-                            <Ionicons name="checkmark-circle" size={18} color="#fff" />
-                          </>
-                        )}
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                )}
-              </View>
-            )}
-          </ScrollView>
-        </View>
-      </View>
-    </Modal>
-  );
-
+  
   const LogoutModal = () => (
     <Modal
       visible={showLogoutModal}
@@ -775,7 +623,22 @@ export default function JobsScreen() {
       />
       
       <LogoutModal />
-      <PaymentModal />
+      
+      <PaymentModal
+        visible={showPaymentModal}
+        jobId={selectedJob?.id ?? 0}
+        plateNumber={selectedJob?.plate_number ?? ''}
+        serviceName={selectedJob ? getServiceName(selectedJob.service) : ''}
+        vehicleName={selectedJob ? getVehicleName(selectedJob.vehicle_type) : ''}
+        amount={Number(selectedJob?.price ?? 0)}
+        onClose={() => {
+          setShowPaymentModal(false);
+          setSelectedJob(null);
+        }}
+        onSuccess={() => refreshAllData()}
+        onCashPayment={handleCashPayment}
+        onManualMpesaPayment={handleManualMpesaPayment}
+      />
     </View>
   );
 }

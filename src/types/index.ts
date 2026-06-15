@@ -47,7 +47,7 @@ export interface Payment {
   job: number;
   method: 'cash' | 'mpesa_manual' | 'mpesa_stk';
   amount: number;
-  transaction_id?: string;
+  mpesa_receipt?: string;
   phone_number?: string;
   checkout_request_id?: string;
   status: 'pending' | 'success' | 'failed';
