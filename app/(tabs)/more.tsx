@@ -23,6 +23,26 @@ export default function More() {
         color: '#10b981',
         route: '/staff-services'
     },
+
+    {
+      id: 'expenses',
+      title: 'Expense Management',
+      icon: 'wallet-outline',
+      color: '#ef4444',
+      description: 'Track business expenses and operational costs',
+      route: '/expenses',
+      roles: ['owner'],
+    },
+   
+    {
+      id: 'financial-analytics',
+      title: 'Financial Analytics',
+      icon: 'stats-chart-outline',
+      color: '#8b5cf6',
+      description: 'Analyze revenue, expenses, and profit trends',
+      route: '/(stack)/financial-analytics',
+    },
+  
     ];
 
   return (
