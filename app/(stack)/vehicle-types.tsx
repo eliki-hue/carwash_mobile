@@ -1,4 +1,4 @@
-// app/(tabs)/vehicle-types.tsx
+
 import React, { useState, useEffect } from 'react';
 import {
   View,

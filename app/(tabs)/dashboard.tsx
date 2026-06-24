@@ -15,7 +15,9 @@ import { useAuth } from '../../src/hooks/useAuth';
 import { Ionicons } from '@expo/vector-icons';
 import api from '../../src/services/api';
 import { LoadingSpinner } from '../../components/LoadingSpinner';
-import { BarChart } from 'react-native-chart-kit';
+import { BarChart, PieChart } from 'react-native-chart-kit';
+import { expenseService } from '../../src/services/expenseService';
+import { ProfitReport } from '../../src/types/expense';
 
 const { width: screenWidth } = Dimensions.get('window');
 
@@ -24,6 +26,16 @@ interface MonthlyData {
   total_jobs: number;
   total_revenue: number;
 }
+
+interface ExpenseCategoryBreakdown {
+  name: string;
+  amount: number;
+  color: string;
+  legendFontColor: string;
+  legendFontSize: number;
+}
+
+const COLORS = ['#ef4444', '#f59e0b', '#3b82f6', '#10b981', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316'];
 
 export default function DashboardScreen() {
   const [dashboardData, setDashboardData] = useState({
@@ -44,6 +56,8 @@ export default function DashboardScreen() {
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [profitReport, setProfitReport] = useState<ProfitReport | null>(null);
+  const [expenseBreakdown, setExpenseBreakdown] = useState<ExpenseCategoryBreakdown[]>([]);
   
   const { role } = useAuth();
   const insets = useSafeAreaInsets();
@@ -60,6 +74,60 @@ export default function DashboardScreen() {
     } catch (error: any) {
       console.error(`Error fetching ${status} jobs:`, error);
       return [];
+    }
+  };
+
+  // Update the loadProfitReport function to handle 404 gracefully
+  const loadProfitReport = async () => {
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const data = await expenseService.getProfitReport(today);
+      setProfitReport(data);
+    } catch (error: any) {
+      console.error('Error loading profit report:', error);
+      // Create fallback data using existing dashboard data
+      const fallbackProfit = {
+        date: new Date().toISOString().split('T')[0],
+        revenue: dashboardData.todayRevenue || 0,
+        expenses: 0,
+        profit: dashboardData.todayRevenue || 0,
+      };
+      setProfitReport(fallbackProfit);
+    }
+  };
+
+  // app/(tabs)/dashboard.tsx - Update the loadExpenseBreakdown function
+
+  const loadExpenseBreakdown = async () => {
+    try {
+      const expenses = await expenseService.getExpenses();
+      const today = new Date().toISOString().split('T')[0];
+      
+      // Filter expenses for today
+      const todayExpenses = expenses.filter((e: { expense_date: string }) => e.expense_date === today);
+      
+      // Group by category
+      const categoryMap = new Map<string, number>();
+      todayExpenses.forEach(expense => {
+        const current = categoryMap.get(expense.category_name) || 0;
+        categoryMap.set(expense.category_name, current + parseFloat(expense.amount));
+      });
+      
+      // Convert to chart data
+      const categories = Array.from(categoryMap.entries());
+      
+      const chartData = categories.map(([name, amount], index) => ({
+        name: name.length > 12 ? name.substring(0, 12) + '...' : name,
+        amount: amount,
+        color: COLORS[index % COLORS.length],
+        legendFontColor: '#374151',
+        legendFontSize: 12,
+      }));
+      
+      setExpenseBreakdown(chartData);
+    } catch (error) {
+      console.error('Error loading expense breakdown:', error);
+      setExpenseBreakdown([]);
     }
   };
 
@@ -97,15 +165,14 @@ export default function DashboardScreen() {
       // Get payments that are successful (status='success') only
       try {
         const paymentsRes = await api.get('/payments/');
-        let allPayments = [];
+        let allPayments: any[] = [];
         if (Array.isArray(paymentsRes.data)) {
           allPayments = paymentsRes.data;
         } else if (paymentsRes.data.results) {
           allPayments = paymentsRes.data.results;
         }
         
-        // Filter only successful payments
-        const successfulPayments = allPayments.filter(p => p.status === 'success');
+        const successfulPayments = allPayments.filter((p: { status: string }) => p.status === 'success');
         
         for (const payment of successfulPayments) {
           const amount = parseFloat(payment.amount);
@@ -141,7 +208,14 @@ export default function DashboardScreen() {
         mpesa: { total: mpesaTotal, count: mpesaCount, percentage: mpesaPercentage },
       });
       
+      // Load monthly data
       await loadMonthlyData();
+      
+      // Load profit report with fallback
+      await loadProfitReport();
+      
+      // Load expense breakdown
+      await loadExpenseBreakdown();
       
     } catch (error: any) {
       console.error('Error loading dashboard:', error);
@@ -161,7 +235,7 @@ export default function DashboardScreen() {
       }
       
       // Only count paid jobs for monthly data
-      const paidJobs = allJobs.filter(job => job.status === 'paid');
+      const paidJobs = allJobs.filter((job: { status: string; }) => job.status === 'paid');
       
       const monthlyMap = new Map();
       months.forEach(month => {
@@ -253,15 +327,17 @@ export default function DashboardScreen() {
 
   const chartData = {
     labels: monthlyData.map(m => m.month),
-    datasets: [{
-      data: monthlyData.map(m => m.total_revenue),
-    }],
+    datasets: [
+      {
+        data: monthlyData.map(m => m.total_revenue),
+      },
+    ],
   };
 
-  const chartConfig = {
+  const barChartConfig = {
     backgroundGradientFrom: '#fff',
     backgroundGradientTo: '#fff',
-    color: (opacity = 1) => `rgba(59, 130, 246, ${opacity})`,
+    color: (opacity: number = 1) => `rgba(59, 130, 246, ${opacity})`,
     strokeWidth: 2,
     barPercentage: 0.7,
     decimalPlaces: 0,
@@ -276,7 +352,12 @@ export default function DashboardScreen() {
     },
   };
 
+  const pieChartConfig = {
+    color: (opacity: number = 1) => `rgba(0, 0, 0, ${opacity})`,
+  };
+
   const currentMonthData = getCurrentMonthData();
+  const hasExpenses = expenseBreakdown.length > 0;
 
   if (!isOwner) {
     return (
@@ -341,6 +422,64 @@ export default function DashboardScreen() {
         </View>
       </View>
 
+      {/* Profit Overview Section */}
+      {profitReport && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Today's Profit Overview</Text>
+          
+          <View style={styles.profitGrid}>
+            <View style={[styles.profitCard, { backgroundColor: '#d1fae5' }]}>
+              <Ionicons name="trending-up-outline" size={20} color="#10b981" />
+              <Text style={styles.profitLabel}>Revenue</Text>
+              <Text style={[styles.profitValue, { color: '#10b981' }]}>
+                {formatCurrency(profitReport.revenue)}
+              </Text>
+            </View>
+            
+            <View style={[styles.profitCard, { backgroundColor: '#fee2e2' }]}>
+              <Ionicons name="trending-down-outline" size={20} color="#ef4444" />
+              <Text style={styles.profitLabel}>Expenses</Text>
+              <Text style={[styles.profitValue, { color: '#ef4444' }]}>
+                {formatCurrency(profitReport.expenses)}
+              </Text>
+            </View>
+            
+            <View style={[styles.profitCard, { backgroundColor: '#dbeafe' }]}>
+              <Ionicons name="cash-outline" size={20} color="#3b82f6" />
+              <Text style={styles.profitLabel}>Profit</Text>
+              <Text style={[styles.profitValue, { color: '#3b82f6' }]}>
+                {formatCurrency(profitReport.profit)}
+              </Text>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {/* Expense Breakdown Chart */}
+      {hasExpenses && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Expense Breakdown (Today)</Text>
+          <View style={styles.chartContainer}>
+            <PieChart
+              data={expenseBreakdown}
+              width={screenWidth - 32}
+              height={200}
+              chartConfig={pieChartConfig}
+              accessor="amount"
+              backgroundColor="transparent"
+              paddingLeft="15"
+              absolute
+            />
+          </View>
+          <View style={styles.expenseTotal}>
+            <Text style={styles.expenseTotalLabel}>Total Expenses Today</Text>
+            <Text style={styles.expenseTotalValue}>
+              {formatCurrency(expenseBreakdown.reduce((sum, item) => sum + item.amount, 0))}
+            </Text>
+          </View>
+        </View>
+      )}
+
       {/* Revenue Section */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Revenue Overview</Text>
@@ -357,7 +496,7 @@ export default function DashboardScreen() {
         </View>
       </View>
 
-      {/* Payment Methods - Now consistent with revenue */}
+      {/* Payment Methods */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Payment Methods</Text>
         
@@ -464,7 +603,7 @@ export default function DashboardScreen() {
               data={chartData}
               width={screenWidth - 32}
               height={220}
-              chartConfig={chartConfig}
+              chartConfig={barChartConfig}
               style={styles.chart}
               showBarTops={false}
               fromZero={true}
@@ -592,6 +731,49 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     color: '#1f2937',
+  },
+  profitGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  profitCard: {
+    flex: 1,
+    minWidth: '30%',
+    padding: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  profitLabel: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginTop: 4,
+  },
+  profitValue: {
+    fontSize: 18,
+    fontWeight: '700',
+    marginTop: 4,
+  },
+  chartContainer: {
+    alignItems: 'center',
+    marginVertical: 8,
+  },
+  expenseTotal: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#f3f4f6',
+    marginTop: 8,
+  },
+  expenseTotalLabel: {
+    fontSize: 14,
+    color: '#6b7280',
+  },
+  expenseTotalValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#ef4444',
   },
   revenueCards: {
     flexDirection: 'row',

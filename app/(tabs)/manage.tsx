@@ -31,6 +31,23 @@ export default function Manage() {
       color: '#f59e0b',
       route: '/users'
     },
+    {
+      id: 'expenses',
+      title: 'Expense Management',
+      icon: 'wallet-outline',
+      color: '#ef4444',
+      description: 'Track business expenses and operational costs',
+      route: '/expenses',
+      roles: ['owner'],
+    },
+    {
+      id: 'expense-categories',
+      title: 'Expense Categories',
+      icon: 'folder-open-outline',
+      color: '#ef4444',
+      description: 'Manage expense categories',
+      route: '/(stack)/expense-categories',  // Make sure this matches the file name
+    },
   ];
 
   return (
