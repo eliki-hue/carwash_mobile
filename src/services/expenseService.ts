@@ -4,6 +4,7 @@ import { Expense, ExpenseCategory, ExpenseFormData, ProfitReport } from '../type
 
 export const expenseService = {
   // Expenses
+  // src/services/expenseService.ts - Update the getExpenses method
   async getExpenses(): Promise<Expense[]> {
     try {
       const response = await api.get('/expenses/');
@@ -81,4 +82,14 @@ export const expenseService = {
       throw error;
     }
   },
+
+
+  // src/services/expenseService.ts - Add this method
+  async getExpensesByDateRange(startDate: Date, endDate: Date): Promise<Expense[]> {
+    const allExpenses = await this.getExpenses();
+    return allExpenses.filter((expense) => {
+      const expenseDate = new Date(expense.expense_date);
+      return expenseDate >= startDate && expenseDate <= endDate;
+    });
+  }
 };

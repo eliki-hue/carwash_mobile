@@ -48,6 +48,14 @@ export default function Manage() {
       description: 'Manage expense categories',
       route: '/(stack)/expense-categories',  // Make sure this matches the file name
     },
+    {
+      id: 'financial-analytics',
+      title: 'Financial Analytics',
+      icon: 'stats-chart-outline',
+      color: '#8b5cf6',
+      description: 'Analyze revenue, expenses, and profit trends',
+      route: '/(stack)/financial-analytics',
+    },
   ];
 
   return (
