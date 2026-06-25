@@ -1,4 +1,4 @@
-# Smart Car Wash Management System - Mobile App
+#  Car Wash Management System - Mobile App
 
 A production-ready mobile application built with **React Native** and **Expo** for managing daily car wash operations. The application provides staff and business owners with a secure, real-time platform to manage customers, vehicles, jobs, payments, and business performance from anywhere.
 
