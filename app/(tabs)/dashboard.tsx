@@ -1,4 +1,4 @@
-// app/(tabs)/dashboard.tsx
+// app/(tabs)/dashboard.tsx - Update the load logic
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
@@ -77,7 +77,6 @@ export default function DashboardScreen() {
     }
   };
 
-  // Update the loadProfitReport function to handle 404 gracefully
   const loadProfitReport = async () => {
     try {
       const today = new Date().toISOString().split('T')[0];
@@ -85,7 +84,7 @@ export default function DashboardScreen() {
       setProfitReport(data);
     } catch (error: any) {
       console.error('Error loading profit report:', error);
-      // Create fallback data using existing dashboard data
+      // Create fallback data
       const fallbackProfit = {
         date: new Date().toISOString().split('T')[0],
         revenue: dashboardData.todayRevenue || 0,
@@ -96,24 +95,19 @@ export default function DashboardScreen() {
     }
   };
 
-  // app/(tabs)/dashboard.tsx - Update the loadExpenseBreakdown function
-
   const loadExpenseBreakdown = async () => {
     try {
       const expenses = await expenseService.getExpenses();
       const today = new Date().toISOString().split('T')[0];
       
-      // Filter expenses for today
       const todayExpenses = expenses.filter((e: { expense_date: string }) => e.expense_date === today);
       
-      // Group by category
       const categoryMap = new Map<string, number>();
       todayExpenses.forEach(expense => {
         const current = categoryMap.get(expense.category_name) || 0;
         categoryMap.set(expense.category_name, current + parseFloat(expense.amount));
       });
       
-      // Convert to chart data
       const categories = Array.from(categoryMap.entries());
       
       const chartData = categories.map(([name, amount], index) => ({
@@ -131,99 +125,6 @@ export default function DashboardScreen() {
     }
   };
 
-  const loadDashboardData = async () => {
-    try {
-      setLoading(true);
-      
-      const [pendingJobs, inProgressJobs, completedJobs, paidJobs] = await Promise.all([
-        fetchJobs('pending'),
-        fetchJobs('in_progress'),
-        fetchJobs('completed'),
-        fetchJobs('paid'),
-      ]);
-      
-      // Only count paid jobs for revenue
-      let totalRevenue = 0;
-      let todayRevenue = 0;
-      let cashTotal = 0;
-      let mpesaTotal = 0;
-      let cashCount = 0;
-      let mpesaCount = 0;
-      const today = new Date().toISOString().split('T')[0];
-      
-      // Calculate revenue from paid jobs only
-      for (const job of paidJobs) {
-        const price = parseFloat(job.price);
-        totalRevenue += price;
-        
-        const jobDate = job.end_time || job.created_at;
-        if (jobDate && jobDate.split('T')[0] === today) {
-          todayRevenue += price;
-        }
-      }
-      
-      // Get payments that are successful (status='success') only
-      try {
-        const paymentsRes = await api.get('/payments/');
-        let allPayments: any[] = [];
-        if (Array.isArray(paymentsRes.data)) {
-          allPayments = paymentsRes.data;
-        } else if (paymentsRes.data.results) {
-          allPayments = paymentsRes.data.results;
-        }
-        
-        const successfulPayments = allPayments.filter((p: { status: string }) => p.status === 'success');
-        
-        for (const payment of successfulPayments) {
-          const amount = parseFloat(payment.amount);
-          if (payment.method === 'cash') {
-            cashTotal += amount;
-            cashCount++;
-          } else if (payment.method === 'mpesa_manual' || payment.method === 'mpesa_stk') {
-            mpesaTotal += amount;
-            mpesaCount++;
-          }
-        }
-      } catch (error) {
-        console.error('Error fetching payments:', error);
-      }
-      
-      // Use the same total from paid jobs for consistency
-      const consistentTotal = totalRevenue;
-      const cashPercentage = consistentTotal > 0 ? (cashTotal / consistentTotal) * 100 : 0;
-      const mpesaPercentage = consistentTotal > 0 ? (mpesaTotal / consistentTotal) * 100 : 0;
-      
-      setDashboardData({
-        totalJobs: pendingJobs.length + inProgressJobs.length + completedJobs.length + paidJobs.length,
-        pendingJobs: pendingJobs.length,
-        inProgressJobs: inProgressJobs.length,
-        completedJobs: completedJobs.length,
-        paidJobs: paidJobs.length,
-        todayRevenue: todayRevenue,
-        totalRevenue: consistentTotal,
-      });
-      
-      setPaymentBreakdown({
-        cash: { total: cashTotal, count: cashCount, percentage: cashPercentage },
-        mpesa: { total: mpesaTotal, count: mpesaCount, percentage: mpesaPercentage },
-      });
-      
-      // Load monthly data
-      await loadMonthlyData();
-      
-      // Load profit report with fallback
-      await loadProfitReport();
-      
-      // Load expense breakdown
-      await loadExpenseBreakdown();
-      
-    } catch (error: any) {
-      console.error('Error loading dashboard:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const loadMonthlyData = async () => {
     try {
       const allJobsRes = await api.get('/jobs/');
@@ -234,8 +135,7 @@ export default function DashboardScreen() {
         allJobs = allJobsRes.data.results;
       }
       
-      // Only count paid jobs for monthly data
-      const paidJobs = allJobs.filter((job: { status: string; }) => job.status === 'paid');
+      const paidJobs = allJobs.filter((job: { status: string }) => job.status === 'paid');
       
       const monthlyMap = new Map();
       months.forEach(month => {
@@ -267,6 +167,92 @@ export default function DashboardScreen() {
     }
   };
 
+  const loadDashboardData = async () => {
+    try {
+      setLoading(true);
+      
+      const [pendingJobs, inProgressJobs, completedJobs, paidJobs] = await Promise.all([
+        fetchJobs('pending'),
+        fetchJobs('in_progress'),
+        fetchJobs('completed'),
+        fetchJobs('paid'),
+      ]);
+      
+      let totalRevenue = 0;
+      let todayRevenue = 0;
+      let cashTotal = 0;
+      let mpesaTotal = 0;
+      let cashCount = 0;
+      let mpesaCount = 0;
+      const today = new Date().toISOString().split('T')[0];
+      
+      for (const job of paidJobs) {
+        const price = parseFloat(job.price);
+        totalRevenue += price;
+        
+        const jobDate = job.end_time || job.created_at;
+        if (jobDate && jobDate.split('T')[0] === today) {
+          todayRevenue += price;
+        }
+      }
+      
+      try {
+        const paymentsRes = await api.get('/payments/');
+        let allPayments: any[] = [];
+        if (Array.isArray(paymentsRes.data)) {
+          allPayments = paymentsRes.data;
+        } else if (paymentsRes.data.results) {
+          allPayments = paymentsRes.data.results;
+        }
+        
+        const successfulPayments = allPayments.filter((p: { status: string }) => p.status === 'success');
+        
+        for (const payment of successfulPayments) {
+          const amount = parseFloat(payment.amount);
+          if (payment.method === 'cash') {
+            cashTotal += amount;
+            cashCount++;
+          } else if (payment.method === 'mpesa_manual' || payment.method === 'mpesa_stk') {
+            mpesaTotal += amount;
+            mpesaCount++;
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching payments:', error);
+      }
+      
+      const consistentTotal = totalRevenue;
+      const cashPercentage = consistentTotal > 0 ? (cashTotal / consistentTotal) * 100 : 0;
+      const mpesaPercentage = consistentTotal > 0 ? (mpesaTotal / consistentTotal) * 100 : 0;
+      
+      setDashboardData({
+        totalJobs: pendingJobs.length + inProgressJobs.length + completedJobs.length + paidJobs.length,
+        pendingJobs: pendingJobs.length,
+        inProgressJobs: inProgressJobs.length,
+        completedJobs: completedJobs.length,
+        paidJobs: paidJobs.length,
+        todayRevenue: todayRevenue,
+        totalRevenue: consistentTotal,
+      });
+      
+      setPaymentBreakdown({
+        cash: { total: cashTotal, count: cashCount, percentage: cashPercentage },
+        mpesa: { total: mpesaTotal, count: mpesaCount, percentage: mpesaPercentage },
+      });
+      
+      await Promise.all([
+        loadMonthlyData(),
+        loadProfitReport(),
+        loadExpenseBreakdown(),
+      ]);
+      
+    } catch (error: any) {
+      console.error('Error loading dashboard:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const changeMonth = (increment: number) => {
     let newMonth = selectedMonth + increment;
     let newYear = selectedYear;
@@ -293,6 +279,7 @@ export default function DashboardScreen() {
     return monthData || { month: currentMonthName, total_jobs: 0, total_revenue: 0 };
   };
 
+  // Load data when component mounts
   useEffect(() => {
     if (isOwner) {
       loadDashboardData();
@@ -301,15 +288,18 @@ export default function DashboardScreen() {
     }
   }, []);
 
+  // Reload monthly data when year changes
   useEffect(() => {
     if (isOwner && !loading) {
       loadMonthlyData();
     }
   }, [selectedYear]);
 
+  // ✅ REFRESH DATA WHEN SCREEN COMES INTO FOCUS
   useFocusEffect(
     useCallback(() => {
       if (isOwner) {
+        console.log('Dashboard focused - refreshing data...');
         loadDashboardData();
       }
     }, [])
@@ -327,11 +317,9 @@ export default function DashboardScreen() {
 
   const chartData = {
     labels: monthlyData.map(m => m.month),
-    datasets: [
-      {
-        data: monthlyData.map(m => m.total_revenue),
-      },
-    ],
+    datasets: [{
+      data: monthlyData.map(m => m.total_revenue),
+    }],
   };
 
   const barChartConfig = {
@@ -657,6 +645,8 @@ export default function DashboardScreen() {
     </ScrollView>
   );
 }
+
+
 
 const styles = StyleSheet.create({
   container: {
